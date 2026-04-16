@@ -12,13 +12,21 @@
 │  │ RSS Fetch (4x/day)  │    │ Daily Digest (1x/day 10am) │ │
 │  │ 8:00 静默            │    │                             │ │
 │  │ 12:00 静默           │    │  script: digest query       │ │
-│  │ 16:00 静默           │    │       ↓ JSON 注入           │ │
-│  │ 20:00 汇报           │    │  Agent 编排 delegate_task   │ │
-│  │                     │    │       ↓                     │ │
-│  │ script: fetcher.py  │    │  ┌──────────────────────┐   │ │
-│  │       ↓             │    │  │ Subagent 1: Draft    │   │ │
-│  │    SQLite DB        │    │  │ (看得到原始推文)       │   │ │
-│  └─────────────────────┘    │  └──────────┬───────────┘   │ │
+│  │ 16:00 静默           │    │       ↓                     │ │
+│  │ 20:00 汇报           │    │  script stdout (~3KB):      │ │
+│  │                     │    │   meta + tweets_file 路径   │ │
+│  │ script: fetcher.py  │    │   + 3 步 prompt 模板        │ │
+│  │       ↓             │    │       ↓                     │ │
+│  │    SQLite DB        │    │  推文 JSON 落盘到 data/     │ │
+│  └─────────────────────┘    │   latest_tweets_<profile>   │ │
+│                             │       ↓                     │ │
+│                             │  父 Agent (sonnet-4-5)      │ │
+│                             │  编排 delegate_task         │ │
+│                             │       ↓                     │ │
+│                             │  ┌──────────────────────┐   │ │
+│                             │  │ Subagent 1: Draft    │   │ │
+│                             │  │ read_file 读推文 JSON│   │ │
+│                             │  └──────────┬───────────┘   │ │
 │                             │             ↓               │ │
 │                             │  ┌──────────────────────┐   │ │
 │                             │  │ Subagent 2: Critique │   │ │
@@ -47,7 +55,8 @@
 ├── fetcher.py              # 数据层：RSS 抓取、SQLite 存储、查询、管理
 ├── digest_generate.py      # 摘要层：数据加载 + 三步 Prompt 模板输出
 ├── data/
-│   └── ai_leaders.db       # SQLite 数据库
+│   ├── ai_leaders.db       # SQLite 数据库
+│   └── latest_tweets_<profile>.json  # 每次 cron run 落盘的推文 JSON（供 Draft subagent 读取）
 └── README.md
 
 ~/.hermes/scripts/
@@ -114,15 +123,20 @@
 **query 输出 JSON 结构：**
 ```json
 {
-  "meta": { "days", "date", "tweet_count", "sources_ok", "sources_total", "profile", "focus_instructions" },
-  "tweets": { "按作者分组的推文数据" },
+  "meta": {
+    "days", "date", "tweet_count", "sources_ok", "sources_total",
+    "profile", "focus_instructions",
+    "tweets_file": "data/latest_tweets_<profile>.json 的绝对路径"
+  },
   "prompts": {
-    "draft": "完整的初稿 Prompt（推文数据已嵌入）",
+    "draft": "初稿 Prompt（告诉 subagent 用 read_file 读 tweets_file）",
     "critique_template": "审稿模板（{draft} 占位符）",
     "refine_template": "精修模板（{draft} + {critique} 占位符）"
   }
 }
 ```
+
+**设计要点：推文原文不进 stdout**。早期设计把 120KB+ 推文 JSON 内嵌到 draft prompt 中，导致父 agent 的首次 LLM API 请求 payload 过大、TTFT 超过 10 分钟被 cron inactivity watchdog 杀掉。改造后推文落盘到 `data/latest_tweets_<profile>.json`，stdout 只传文件路径（~3KB），由 Draft subagent 用 `read_file` 工具自己读。subagent 的 system prompt 不包含父 agent 的工具 schema + memory，payload 小很多。
 
 ## 三步隔离反思设计
 
@@ -173,10 +187,12 @@ SQLite（`data/ai_leaders.db`），5 张表：
 
 ## Cron Jobs
 
-| Job | 时间 (PST) | 说明 |
-|-----|-----------|------|
-| AI Leaders RSS Fetch | 8:00, 12:00, 16:00, 20:00 | 抓取 RSS，20 点发汇报 |
-|| AI Leaders Daily Digest | 10:00 | 三步反思生成摘要，保存到 DB，发送到 Telegram |
+| Job | 时间 (PST) | 模型 | 说明 |
+|-----|-----------|------|------|
+| AI Leaders RSS Fetch | 8:00, 12:00, 16:00, 20:00 | — | 抓取 RSS，20 点发汇报 |
+| AI Leaders Daily Digest | 10:00 | 父 agent: sonnet-4-5；subagents: 默认（opus） | 三步反思生成摘要，保存到 DB，发送到 Telegram |
+
+**为什么父 agent 用 sonnet-4-5？** 父 agent 只做编排（parse JSON + 3 次 `delegate_task` + 1 次 `terminal` 保存），不需要深度推理。sonnet 启动 TTFT 明显比 opus 快，避免 cron inactivity watchdog 超时。subagent 才是真正生产内容的，保留默认 opus 保证质量。
 
 ## 手动使用
 
@@ -209,5 +225,5 @@ python3 fetcher.py authors
 ## 已知限制
 
 - Nitter 实例不稳定，有 fallback 但可能全挂（尤其 Elon Musk 的 RSS）
-- 三步 delegate_task 串行执行，生成摘要需要几分钟
-- digest_generate.py query 输出较大（~120KB JSON），因为包含完整推文数据
+- 三步 delegate_task 串行执行，生成摘要需要 10-15 分钟
+- 每次 cron run 会覆盖 `data/latest_tweets_<profile>.json`（只保留最新一份，供 Draft subagent 读取）

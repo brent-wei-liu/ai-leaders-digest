@@ -109,10 +109,27 @@ DRAFT_PROMPT = """你是一位资深 AI 行业分析师，为 AI/ML 从业者撰
 你的任务是 INTERPRET（解读），而非简单报道。找出模式，解释意义，连接线索。
 中文评论，英文人名/术语。简洁、适合手机阅读。
 
-以下是过去 {days} 天 AI 领袖的推文数据：
+推文数据存储在 JSON 文件中。请用 read_file 工具读取完整文件：
+文件路径：{tweets_file}
 
-DATA:
-{tweets_json}
+文件结构（按作者 handle 分组）：
+{{
+  "<handle>": {{
+    "name": "<显示名>",
+    "category": "<ai-pioneer/tech-leader/startup/...>",
+    "tweets": [
+      {{"date": "<ISO8601>", "text": "<推文正文>", "is_retweet": true/false}},
+      ...
+    ]
+  }},
+  ...
+}}
+
+元信息：
+- 时间范围：过去 {days} 天
+- 推文总数：{tweet_count} 条
+- Sources：{sources_ok}/{sources_total}
+- 日期：{date}
 
 请按以下格式生成摘要：
 
@@ -204,7 +221,12 @@ REFINE_PROMPT = """你是一位资深 AI 行业分析师，正在制作摘要的
 # ── Commands ─────────────────────────────────────────────────────────
 
 def cmd_query(days=3, profile="default"):
-    """输出推文数据 + 元信息 JSON 到 stdout，供 Hermes cron script 注入。"""
+    """输出元信息 + prompt 模板 JSON 到 stdout；推文数据写到磁盘文件。
+
+    为避免父 agent 的 API payload 过大导致 TTFT 超时（>10min），
+    推文 JSON 不再内嵌到 prompt 中，而是落盘到 data/latest_tweets_<profile>.json，
+    由 Draft subagent 自己用 read_file 读取。
+    """
     data = load_tweets(days, profile)
 
     if data["tweet_count"] == 0:
@@ -223,7 +245,16 @@ def cmd_query(days=3, profile="default"):
     if pr.get("others") == "brief":
         focus_instructions += "非重点作者每人只给一行。\n"
 
-    # 输出完整的三步编排数据
+    # 推文数据落盘，供 Draft subagent 读取（绝对路径避免 cwd 问题）
+    data_dir = Path(DB_PATH).resolve().parent
+    data_dir.mkdir(parents=True, exist_ok=True)
+    tweets_file = data_dir / f"latest_tweets_{profile}.json"
+    tweets_file.write_text(
+        json.dumps(data["data"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # 输出瘦身后的编排数据（不含推文正文）
     output = {
         "meta": {
             "days": days,
@@ -233,12 +264,12 @@ def cmd_query(days=3, profile="default"):
             "sources_total": data["sources_total"],
             "profile": profile,
             "focus_instructions": focus_instructions,
+            "tweets_file": str(tweets_file),
         },
-        "tweets": data["data"],
         "prompts": {
             "draft": DRAFT_PROMPT.format(
                 days=days,
-                tweets_json=json.dumps(data["data"], ensure_ascii=False, indent=2),
+                tweets_file=str(tweets_file),
                 date=today,
                 tweet_count=data["tweet_count"],
                 sources_ok=data["sources_ok"],
