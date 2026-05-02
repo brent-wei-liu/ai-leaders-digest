@@ -81,10 +81,73 @@ This appends a row to the `summaries` table with today's date, days_back, tweet_
 
 Use the Gmail MCP `create_draft` tool to create (not send) a draft email containing the final digest. The user reviews in Gmail and sends manually.
 
-Parameters:
+**Convert the digest markdown to HTML before calling `create_draft`** — Gmail's UI does not render markdown, so passing raw markdown shows it as source. Pass BOTH parameters:
+
 - `to`: read `DIGEST_RECIPIENT` from `<project>/.env` (parse `KEY=VALUE` lines, value of `DIGEST_RECIPIENT`). If missing, abort with a clear error.
 - `subject`: `AI Leaders Digest YYYY-MM-DD`
-- `body`: the full final digest text (plain markdown is fine — Gmail renders linebreaks)
+- `body`: the plain markdown text (fallback for non-HTML clients)
+- `htmlBody`: the rendered HTML (used by Gmail web/mobile)
+
+Renderer requirements:
+- Headings (`#` / `##` / `###`) → `<h1>` / `<h2>` / `<h3>`
+- Bullet lists (`- ` or `* `) → `<ul><li>`
+- Bold (`**text**`) → `<strong>`
+- Inline code (`` `x` ``) → `<code>`
+- Links `[text](url)` → `<a href="url">text</a>`
+- Blank lines separate paragraphs (`<p>`)
+- HTML-escape the source first to prevent injection from any tweet content
+
+Wrap the HTML in a minimal shell with inline styles for readability:
+```html
+<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:680px;margin:auto;padding:20px;line-height:1.5;color:#222;">
+  ...rendered content...
+</body></html>
+```
+
+Prefer Python's `markdown` library if available (`python3 -c "import markdown; print(markdown.markdown(open('<file>').read()))"`). Otherwise inline a minimal converter:
+
+```python
+import html, re
+def md_to_html(md):
+    safe = html.escape(md)
+    out, in_list, para = [], False, []
+    bold = re.compile(r'\*\*(.+?)\*\*')
+    code = re.compile(r'`([^`]+?)`')
+    link = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+    def inline(s):
+        s = bold.sub(r'<strong>\1</strong>', s)
+        s = code.sub(r'<code>\1</code>', s)
+        s = link.sub(r'<a href="\2">\1</a>', s)
+        return s
+    def flush_para():
+        nonlocal para
+        if para:
+            out.append('<p>' + inline(' '.join(para).strip()) + '</p>')
+            para = []
+    def close_list():
+        nonlocal in_list
+        if in_list: out.append('</ul>'); in_list = False
+    for line in safe.split('\n'):
+        s = line.strip()
+        m = re.match(r'^(#{1,3})\s+(.+)$', s)
+        if m:
+            flush_para(); close_list()
+            lvl = len(m.group(1))
+            out.append(f'<h{lvl}>{inline(m.group(2))}</h{lvl}>')
+        elif s.startswith('- ') or s.startswith('* '):
+            flush_para()
+            if not in_list: out.append('<ul>'); in_list = True
+            out.append(f'<li>{inline(s[2:])}</li>')
+        elif not s:
+            flush_para(); close_list()
+        else:
+            close_list(); para.append(s)
+    flush_para(); close_list()
+    return ('<!DOCTYPE html><html><body style="font-family:-apple-system,'
+            'BlinkMacSystemFont,Segoe UI,sans-serif;max-width:680px;'
+            'margin:auto;padding:20px;line-height:1.5;color:#222;">'
+            + '\n'.join(out) + '</body></html>')
+```
 
 If the Gmail MCP isn't available, surface that to the user — do not silently fall back to anything else.
 
