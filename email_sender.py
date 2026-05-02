@@ -150,3 +150,31 @@ def send_email(to, subject, body_md, from_addr=None):
         server.send_message(msg)
 
     return {"sent": True, "to": to, "subject": subject}
+
+
+if __name__ == "__main__":
+    import argparse
+    import json
+    import sys
+
+    ap = argparse.ArgumentParser(
+        description="Send a markdown body (from stdin) as an email via Gmail SMTP."
+    )
+    ap.add_argument("--subject", required=True, help="Email subject line")
+    ap.add_argument("--to", default="brent.wei.liu@gmail.com",
+                    help="Recipient (default: brent.wei.liu@gmail.com)")
+    ap.add_argument("--from", dest="from_addr", default=None,
+                    help="From override (default: authenticated GMAIL_USER)")
+    args = ap.parse_args()
+
+    body = sys.stdin.read()
+    if not body.strip():
+        print(json.dumps({"error": "stdin empty"}))
+        sys.exit(1)
+
+    try:
+        result = send_email(args.to, args.subject, body, from_addr=args.from_addr)
+        print(json.dumps(result, ensure_ascii=False))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        sys.exit(1)
