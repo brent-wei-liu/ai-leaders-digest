@@ -17,6 +17,18 @@ Generate a daily Chinese-language digest of ~12 AI/tech leaders' recent tweets, 
 
 Always `cd` to the project root first.
 
+### Web tool budget (applies across Steps 3 / 4 / 5)
+
+Each subagent may use `WebSearch` and `WebFetch` to verify or enrich content. **Hard cap = 20 calls total across all three steps**, split as:
+
+| Step | Budget | Use it for |
+|------|--------|------------|
+| Draft (3) | **5** | filling in author / company context the tweets don't include (recent news a tweet alludes to, a paper a tweet cites, what a referenced product actually is) |
+| Critique (4) | **10** | fact-checking claims in the draft, verifying named entities, catching wrong attributions or stale interpretations |
+| Refine (5) | **5** | resolving the specific factual corrections the critique flagged |
+
+When spawning each subagent, tell it explicitly: "you have N web tool calls available — use them on the highest-value facts first." Do not exceed the per-step budget; running over starves later steps. The budget is a hard ceiling, not a target — using fewer calls is fine if the content is solid.
+
 ### Step 1 — Refresh tweet data (idempotent)
 
 ```bash
@@ -47,15 +59,21 @@ Spawn an Agent with `subagent_type=general-purpose`. Give it:
 - **Prompt**: `prompts.draft` returned by Step 2 (already includes the `tweets_file` path inline as plain text instructions)
 - **Goal**: produce the initial digest in the format specified by the prompt
 
+**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to fill in context the tweets don't include — what a referenced product is, the paper a tweet cites, the news event a tweet alludes to, the org someone joined. Use these on the most consequential references (the ones your analysis hangs on). Stay within 5 calls."
+
 Capture the returned draft text. Do not strip or reformat.
 
-### Step 4 — Critique (subagent #2, **ISOLATED**)
+### Step 4 — Critique (subagent #2, **DATA-ISOLATED but web-enabled**)
 
 This step is the heart of the pipeline. The critique subagent **must not** see the raw tweets — it can only judge the draft on its own merits. This is what catches lazy "X is important because it's important" tautologies that a single-pass writer wouldn't notice.
 
 Spawn an Agent with `subagent_type=general-purpose`. Give it ONLY:
 - The Critique template (`prompts.critique_template`) with `{draft}` substituted to the Step 3 output
-- **Do NOT mention `tweets_file`, do NOT pass the tweet JSON path, do NOT include any tweet content.** Even if the subagent has Read tool access, it should have no idea what file to look at.
+- **Do NOT mention `tweets_file`, do NOT pass the tweet JSON path, do NOT include any tweet content.** Even if the subagent has Read tool access, it should have no idea what tweet file to look at.
+
+**However, append to the prompt**: "You may use WebSearch / WebFetch up to **10 times** to fact-check claims the draft makes — verify a quoted statistic, confirm a person's current role/affiliation, validate that an event happened the way the draft frames it, or look up whether a referenced paper/launch is real. Web access is for *verification of claims in the draft*, not for re-fetching the original tweet stream. Spend the budget on the highest-value fact-checks first — wrong attributions, dates, and named entities typically beat prose-quality nits."
+
+This is the largest budget on purpose — a critic who can verify facts beats a critic working from the prose alone, especially for named-entity claims.
 
 Capture the critique text (which ends with grade A / B / C).
 
@@ -64,6 +82,8 @@ Capture the critique text (which ends with grade A / B / C).
 Spawn an Agent with `subagent_type=general-purpose`. Give it:
 - The Refine template (`prompts.refine_template`) with `{draft}` and `{critique}` substituted from Steps 3 and 4
 - **Goal**: produce the final digest, addressing every critique point
+
+**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to resolve specific factual corrections the critique flagged (e.g. confirming a corrected role/title, the right name of a product, a precise date). Don't re-litigate the critique — use the budget only when correcting a flagged fact requires a lookup."
 
 Capture the final text.
 
