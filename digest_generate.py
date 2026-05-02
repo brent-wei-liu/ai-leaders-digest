@@ -354,6 +354,32 @@ def main():
     elif cmd == "stats":
         cmd_stats()
 
+    elif cmd == "send-email":
+        subject = None
+        to = "brent.wei.liu@gmail.com"
+        i = 0
+        while i < len(args):
+            if args[i] == "--subject" and i + 1 < len(args):
+                subject = args[i + 1]; i += 2
+            elif args[i] == "--to" and i + 1 < len(args):
+                to = args[i + 1]; i += 2
+            else:
+                i += 1
+        if not subject:
+            print(json.dumps({"error": "--subject required"}, ensure_ascii=False))
+            sys.exit(2)
+        body = sys.stdin.read()
+        if not body.strip():
+            print(json.dumps({"error": "stdin empty"}, ensure_ascii=False))
+            sys.exit(1)
+        from email_sender import send_email
+        try:
+            result = send_email(to, subject, body)
+            print(json.dumps(result, ensure_ascii=False))
+        except Exception as e:
+            print(json.dumps({"error": str(e)}, ensure_ascii=False))
+            sys.exit(1)
+
     else:
         print(f"未知命令: {cmd}")
         print(__doc__)

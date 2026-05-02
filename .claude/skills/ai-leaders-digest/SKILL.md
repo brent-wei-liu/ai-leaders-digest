@@ -77,12 +77,22 @@ echo "$FINAL_TEXT" | python3 digest_generate.py save-summary --days 3 --profile 
 
 This appends a row to the `summaries` table with today's date, days_back, tweet_count, sources_ok, sources_total, focus_profile, content, created_at.
 
-### Step 7 — Report
+### Step 7 — Send via Gmail (SMTP)
+
+```bash
+echo "$FINAL_TEXT" | python3 digest_generate.py send-email --subject "AI Leaders Digest 2026-05-02"
+```
+
+Recipient defaults to `brent.wei.liu@gmail.com`. The script uses Gmail SMTP (`smtp.gmail.com:587 STARTTLS`) with credentials from env (`GMAIL_USER`, `GMAIL_APP_PASSWORD`) or `<project>/.env` fallback. See README → Email Setup. The body is sent as `multipart/alternative` (raw markdown text part + rendered HTML part).
+
+If credentials are missing the script exits non-zero with a JSON error — surface it in the report instead of pretending the email was sent.
+
+### Step 8 — Report
 
 Print briefly:
 - Tweet count + sources used
 - Critique grade (A / B / C)
-- "Saved digest for {date}" or any error
+- "Saved digest for {date}" + email status (sent / skipped on missing creds / error)
 
 ## The three prompt templates (verbatim, embedded for self-containment)
 

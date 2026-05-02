@@ -195,6 +195,21 @@ SQLite（`data/ai_leaders.db`），5 张表：
 
 任务由 Claude Code 的 scheduled-tasks 系统管理（`~/.claude/scheduled-tasks/`），无须独立守护进程。
 
+## Email Setup
+
+`digest_generate.py send-email` 通过 Gmail SMTP（`smtp.gmail.com:587 STARTTLS`）真发邮件。配置一次即可：
+
+1. Google 账号开启 **2FA**（如尚未启用）
+2. 访问 [App Passwords](https://myaccount.google.com/apppasswords) 生成新密码（命名如 `ai-leaders-digest`）
+3. 项目根创建 `.env`（已 gitignore，可参考 `.env.example`）：
+   ```
+   GMAIL_USER=brent.wei.liu@gmail.com
+   GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx   # 16 位 App Password，不带空格
+   ```
+   或者 export 到 `~/.zshrc`：`export GMAIL_USER=...; export GMAIL_APP_PASSWORD=...`
+
+env 变量优先于 `.env`。未配置时 `send-email` 子命令会以 JSON 错误退出非零，scheduled task 报告里能直接看到失败原因。
+
 ## 手动使用
 
 ```bash
