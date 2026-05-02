@@ -77,22 +77,23 @@ echo "$FINAL_TEXT" | python3 digest_generate.py save-summary --days 3 --profile 
 
 This appends a row to the `summaries` table with today's date, days_back, tweet_count, sources_ok, sources_total, focus_profile, content, created_at.
 
-### Step 7 — Send via Gmail (SMTP)
+### Step 7 — Create Gmail draft
 
-```bash
-echo "$FINAL_TEXT" | python3 email_sender.py --subject "AI Leaders Digest 2026-05-02"
-```
+Use the Gmail MCP `create_draft` tool to create (not send) a draft email containing the final digest. The user reviews in Gmail and sends manually.
 
-Recipient comes from the `DIGEST_RECIPIENT` env var (set in `.env`); pass `--to <addr>` to override. The standalone `email_sender.py` CLI uses Gmail SMTP (`smtp.gmail.com:587 STARTTLS`) with credentials from env (`GMAIL_USER`, `GMAIL_APP_PASSWORD`) or `<project>/.env` fallback. See README → Email Setup. The body is sent as `multipart/alternative` (raw markdown text part + rendered HTML part).
+Parameters:
+- `to`: read `DIGEST_RECIPIENT` from `<project>/.env` (parse `KEY=VALUE` lines, value of `DIGEST_RECIPIENT`). If missing, abort with a clear error.
+- `subject`: `AI Leaders Digest YYYY-MM-DD`
+- `body`: the full final digest text (plain markdown is fine — Gmail renders linebreaks)
 
-If credentials are missing the script exits non-zero with a JSON error — surface it in the report instead of pretending the email was sent.
+If the Gmail MCP isn't available, surface that to the user — do not silently fall back to anything else.
 
 ### Step 8 — Report
 
 Print briefly:
 - Tweet count + sources used
 - Critique grade (A / B / C)
-- "Saved digest for {date}" + email status (sent / skipped on missing creds / error)
+- "Saved digest for {date}" + draft status (created with id `<id>` / Gmail MCP unavailable / error)
 
 ## The three prompt templates (verbatim, embedded for self-containment)
 

@@ -84,7 +84,7 @@ Scheduled tasks 由 Claude Code 管理（`~/.claude/scheduled-tasks/`）：
 
 ## Quick start
 
-1. Configure `.env` (see [Email Setup](#email-setup) below) if you want digest emails.
+1. Set `DIGEST_RECIPIENT` in `.env` (see `.env.example`) to your address — the digest is delivered as a Gmail draft via the Gmail MCP.
 2. On first run, the SQLite DB will be auto-created (see `init_db()` in `fetcher.py`). The first `python3 fetcher.py fetch` run will populate it from Nitter RSS — no manual seeding needed.
 3. Register the scheduled tasks per [Setup scheduled tasks](#setup-scheduled-tasks).
 
@@ -209,35 +209,9 @@ Scheduled tasks are declared in [`schedules.yaml`](./schedules.yaml). To registe
 
 Claude will use the `schedule` skill to create each task, copying the relevant SKILL.md (or embedding the inline `script:` for skill-less tasks like `ai-leaders-fetch`) into `~/Documents/Claude/Scheduled/`.
 
-## Email Setup
+## Email delivery
 
-`email_sender.py` 是独立 CLI（`echo "$body" | python3 email_sender.py --subject "..."`），通过 Gmail SMTP（`smtp.gmail.com:587 STARTTLS`）真发邮件。配置一次即可：
-
-1. Google 账号开启 **2FA**（如尚未启用）
-2. 访问 [App Passwords](https://myaccount.google.com/apppasswords) 生成新密码（命名如 `ai-leaders-digest`）
-3. 项目根创建 `.env`（已 gitignore，可参考 `.env.example`）：
-   ```
-   GMAIL_USER=your.email@example.com
-   GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx   # 16 位 App Password，不带空格
-   DIGEST_RECIPIENT=your.email@example.com
-   ```
-   或者 export 到 `~/.zshrc`：`export GMAIL_USER=...; export GMAIL_APP_PASSWORD=...; export DIGEST_RECIPIENT=...`
-
-env 变量优先于 `.env`。未配置时 `email_sender.py` 会以 JSON 错误退出非零，scheduled task 报告里能直接看到失败原因。
-
-## Email Test
-
-After configuring `.env`, verify it works:
-
-```bash
-echo "hello world" | python3 email_sender.py --subject "Test email"
-```
-
-You should:
-- See `{"sent": true, "to": "...", "subject": "Test email"}` in stdout
-- Receive the email at the recipient (`--to` flag if passed, else `DIGEST_RECIPIENT` env var)
-
-If credentials are missing, you'll get `{"error": "Email credentials missing..."}` and exit 1.
+Digest is delivered as a Gmail draft via the Gmail MCP. Set `DIGEST_RECIPIENT` in `.env` (see `.env.example`) to the recipient address. Open the draft in Gmail to review and send.
 
 ## 手动使用
 
