@@ -1,12 +1,12 @@
 # AI Leaders Digest
 
-追踪 12 位 AI/科技领袖的推文，通过 Nitter RSS 抓取、SQLite 存储，由 Hermes cron job 编排三步隔离反思流水线（Draft → Critique → Refine）生成高质量中文摘要。
+追踪 12 位 AI/科技领袖的推文，通过 Nitter RSS 抓取、SQLite 存储，由 Claude Code scheduled tasks 编排三步隔离反思流水线（Draft → Critique → Refine）生成高质量中文摘要。
 
 ## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Hermes Cron Jobs                                           │
+│  Claude Code Scheduled Tasks                                │
 │                                                             │
 │  ┌─────────────────────┐    ┌─────────────────────────────┐ │
 │  │ RSS Fetch (4x/day)  │    │ Daily Digest (1x/day 10am) │ │
@@ -20,8 +20,8 @@
 │  │    SQLite DB        │    │  推文 JSON 落盘到 data/     │ │
 │  └─────────────────────┘    │   latest_tweets_<profile>   │ │
 │                             │       ↓                     │ │
-│                             │  父 Agent (sonnet-4-5)      │ │
-│                             │  编排 delegate_task         │ │
+│                             │  ai-leaders-digest skill    │ │
+│                             │  编排 Agent (Task) 子任务   │ │
 │                             │       ↓                     │ │
 │                             │  ┌──────────────────────┐   │ │
 │                             │  │ Subagent 1: Draft    │   │ │
@@ -51,18 +51,19 @@
 ## 文件结构
 
 ```
-~/.hermes/hermes-agent/ai-leaders-digest/
+/Users/little_claw/ai-leaders-digest/
 ├── fetcher.py              # 数据层：RSS 抓取、SQLite 存储、查询、管理
 ├── digest_generate.py      # 摘要层：数据加载 + 三步 Prompt 模板输出
 ├── data/
 │   ├── ai_leaders.db       # SQLite 数据库
-│   └── latest_tweets_<profile>.json  # 每次 cron run 落盘的推文 JSON（供 Draft subagent 读取）
+│   └── latest_tweets_<profile>.json  # 每次 run 落盘的推文 JSON（供 Draft subagent 读取）
+├── .claude/skills/ai-leaders-digest/SKILL.md  # 三步反思流水线编排
 └── README.md
-
-~/.hermes/scripts/
-├── ai_leaders_fetch.py     # Cron 包装：调用 fetcher.py fetch
-└── ai_leaders_digest.py    # Cron 包装：调用 digest_generate.py query
 ```
+
+Scheduled tasks 由 Claude Code 管理（`~/.claude/scheduled-tasks/`）：
+- `ai-leaders-fetch`：每天 4 次（8/12/16/20 PT）跑 `fetcher.py fetch`
+- `ai-leaders-digest`：每天 10:00 PT 调用 `ai-leaders-digest` skill 跑三步流水线
 
 ## 跟踪的 12 位领袖
 
@@ -110,7 +111,7 @@
 
 ### digest_generate.py
 
-数据加载 + 三步 Prompt 模板输出。不调用 LLM，LLM 调用由 Hermes cron agent 通过 delegate_task 完成。
+数据加载 + 三步 Prompt 模板输出。不调用 LLM，LLM 调用由 `ai-leaders-digest` skill 通过 Claude Code 的 `Agent` (Task) 工具编排。
 
 **命令：**
 
@@ -148,7 +149,7 @@
 | Critique | #2 | 只有初稿 | 审稿意见 + A/B/C 评分 | 看不到原始推文 |
 | Refine | #3 | 初稿 + 审稿意见 | 终稿 | 看不到原始推文 |
 
-每个 subagent 通过 Hermes `delegate_task` 创建，天然上下文隔离。
+每个 subagent 通过 Claude Code 的 `Agent` (Task) 工具创建，天然上下文隔离。
 
 ## Focus Profiles
 
@@ -185,19 +186,19 @@ SQLite（`data/ai_leaders.db`），5 张表：
 | focus_profiles | Focus 配置 |
 | subscribers | 订阅者 |
 
-## Cron Jobs
+## Scheduled Tasks (Claude Code)
 
-| Job | 时间 (PST) | 模型 | 说明 |
-|-----|-----------|------|------|
-| AI Leaders RSS Fetch | 8:00, 12:00, 16:00, 20:00 | — | 抓取 RSS，20 点发汇报 |
-| AI Leaders Daily Digest | 10:00 | 父 agent: sonnet-4-5；subagents: 默认（opus） | 三步反思生成摘要，保存到 DB，发送到 Telegram |
+| Task | 时间 (PT) | 说明 |
+|------|----------|------|
+| `ai-leaders-fetch` | 8:00, 12:00, 16:00, 20:00 | 跑 `python3 fetcher.py fetch` |
+| `ai-leaders-digest` | 10:00 | 调用 `ai-leaders-digest` skill 跑三步反思生成摘要并保存到 DB |
 
-**为什么父 agent 用 sonnet-4-5？** 父 agent 只做编排（parse JSON + 3 次 `delegate_task` + 1 次 `terminal` 保存），不需要深度推理。sonnet 启动 TTFT 明显比 opus 快，避免 cron inactivity watchdog 超时。subagent 才是真正生产内容的，保留默认 opus 保证质量。
+任务由 Claude Code 的 scheduled-tasks 系统管理（`~/.claude/scheduled-tasks/`），无须独立守护进程。
 
 ## 手动使用
 
 ```bash
-cd ~/.hermes/hermes-agent/ai-leaders-digest
+cd /Users/little_claw/ai-leaders-digest
 
 # 抓取最新推文
 python3 fetcher.py fetch
@@ -215,15 +216,15 @@ python3 fetcher.py authors
 
 ## 迁移说明
 
-从 OpenClaw workspace 迁移而来。主要改动：
+从 OpenClaw → Hermes → Claude Code 演进而来。当前迭代的主要改动：
 
 - `rss_digest.py` → `fetcher.py`（重命名，功能不变）
-- `digest_generate.py` 去掉了 OpenClaw Gateway API 调用，改为输出 JSON + Prompt 模板，LLM 调用由 Hermes delegate_task 完成
-- Cron 脚本必须是 .py（Hermes scheduler 固定用 Python 解释器执行）
-- Cron 脚本必须放在 `~/.hermes/scripts/`（路径校验限制）
+- `digest_generate.py` 去掉了 OpenClaw Gateway API 调用，输出 JSON + 三步 Prompt 模板
+- 编排层从 Hermes `delegate_task` 切到 Claude Code `Agent` (Task) 工具，由 `.claude/skills/ai-leaders-digest/SKILL.md` 描述完整流水线
+- 调度层从 Hermes cron 切到 Claude Code scheduled-tasks（`~/.claude/scheduled-tasks/`），不再依赖独立守护进程
 
 ## 已知限制
 
 - Nitter 实例不稳定，有 fallback 但可能全挂（尤其 Elon Musk 的 RSS）
-- 三步 delegate_task 串行执行，生成摘要需要 10-15 分钟
-- 每次 cron run 会覆盖 `data/latest_tweets_<profile>.json`（只保留最新一份，供 Draft subagent 读取）
+- 三步 subagent 串行执行，生成摘要需要 10-15 分钟
+- 每次 run 会覆盖 `data/latest_tweets_<profile>.json`（只保留最新一份，供 Draft subagent 读取）
