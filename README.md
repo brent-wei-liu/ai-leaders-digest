@@ -208,7 +208,21 @@ SQLite（`data/ai_leaders.db`），5 张表：
    ```
    或者 export 到 `~/.zshrc`：`export GMAIL_USER=...; export GMAIL_APP_PASSWORD=...`
 
-env 变量优先于 `.env`。未配置时 `send-email` 子命令会以 JSON 错误退出非零，scheduled task 报告里能直接看到失败原因。
+env 变量优先于 `.env`。未配置时 `email_sender.py` 会以 JSON 错误退出非零，scheduled task 报告里能直接看到失败原因。
+
+## Email Test
+
+After configuring `.env`, verify it works:
+
+```bash
+echo "hello world" | python3 email_sender.py --subject "Test email"
+```
+
+You should:
+- See `{"sent": true, "to": "...", "subject": "Test email"}` in stdout
+- Receive the email at the configured `--to` address (default: brent.wei.liu@gmail.com)
+
+If credentials are missing, you'll get `{"error": "Email credentials missing..."}` and exit 1.
 
 ## 手动使用
 
