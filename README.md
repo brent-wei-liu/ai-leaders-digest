@@ -87,6 +87,39 @@ Scheduled tasks 由 Claude Code 管理（`~/.claude/scheduled-tasks/`）：
 1. Set `DIGEST_RECIPIENT` in `.env` (see `.env.example`) to your address — the digest is delivered as a Gmail draft via the Gmail MCP.
 2. On first run, the SQLite DB will be auto-created (see `init_db()` in `fetcher.py`). The first `python3 fetcher.py fetch` run will populate it from Nitter RSS — no manual seeding needed.
 3. Register the scheduled tasks per [Setup scheduled tasks](#setup-scheduled-tasks).
+4. (Optional) Launch the Web UI per [Web UI](#web-ui) below to browse tweets and digests.
+
+## Web UI
+
+A FastAPI + single-file HTML browser for the tweet feed and digest archive, themed after Elden Ring (deep brown/black, hairline gold, Cinzel + Cormorant Garamond). Reads the same `data/ai_leaders.db`, adds two columns (`starred`, `starred_at`) for marking tweets via additive `ALTER TABLE` migration on startup.
+
+**Dependencies** (shared with job-pipeline):
+```bash
+pip3 install fastapi uvicorn
+```
+
+**Start the server**:
+```bash
+cd /path/to/ai-leaders-digest && python3 api.py
+```
+
+The server binds `0.0.0.0:8081`, so:
+- Local desktop: http://127.0.0.1:8081
+- Phone on the same Wi-Fi: `http://<mac-lan-ip>:8081` (find the Mac's IP with `ipconfig getifaddr en0`)
+
+First time accessing from another device, **macOS firewall** will prompt: System Settings → Network → Firewall → Allow incoming connections for `python3` (or the Anaconda/Homebrew interpreter you used).
+
+**Routes**:
+- `/` — single-page UI (Tweets tab + Digests tab)
+- `/api/stats`, `/api/authors`, `/api/tweets`, `/api/summaries`, `/api/summaries/{id}`
+- `POST /api/tweets/{id}/star` and `/unstar`
+
+**Features**:
+- Search tweets full-text, filter by author, "★ Starred only" toggle
+- Star / unstar tweets (persisted)
+- Click an author name to jump to their feed
+- Open any historical digest as rendered HTML in a modal
+- Mobile-friendly (≤768 px breakpoint, 44 px touch targets)
 
 ## 核心文件说明
 

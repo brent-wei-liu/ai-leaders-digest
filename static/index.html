@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<title>AI Leaders Digest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;800&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<style>
+/* ============================================================
+   Elden Ring tokens — sampled from in-game UI palette.
+   Working ratio: ~70% dark, ~25% gold, ~5% parchment.
+   ============================================================ */
+:root {
+  --er-bg-deep:      #0A0604;
+  --er-bg-soft:      #1B120B;
+  --er-frame-muted:  #3A2A18;
+  --er-gold-muted:   #8C6A2B;
+  --er-gold:         #C9962E;
+  --er-gold-bright:  #F1C75A;
+  --er-parchment:    #E8DCB4;
+  --er-accent-cyan:  #9BD7E0;
+  --er-accent-red:   #A8392C;
+
+  --font-title: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  --font-body:  'Cormorant Garamond', 'Songti SC', 'STSong', 'Georgia', serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--er-bg-deep);
+  color: var(--er-parchment);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  min-height: 100vh;
+  /* Vignette + grain (per reference §4) */
+  background-image:
+    radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.55) 100%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.42  0 0 0 0 0.17  0 0 0 0.04 0'/></filter><rect width='240' height='240' filter='url(%23n)'/></svg>");
+  background-attachment: fixed, fixed;
+  background-size: cover, 240px 240px;
+}
+
+/* ============================================================
+   Header
+   ============================================================ */
+.site-header {
+  border-bottom: 1px solid var(--er-frame-muted);
+  padding: 32px 24px 18px;
+  text-align: center;
+}
+.brand {
+  font-family: var(--font-title);
+  font-weight: 800;
+  font-size: clamp(20px, 4.2vw, 28px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  /* The single cracked-gold moment — used once, on the brand. */
+  background-image:
+    linear-gradient(180deg, var(--er-gold-bright) 0%, var(--er-gold) 50%, var(--er-gold-muted) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 18px rgba(241, 199, 90, 0.18);
+  margin: 0;
+}
+.tagline {
+  font-style: italic;
+  color: var(--er-gold-muted);
+  font-size: 13px;
+  margin-top: 4px;
+  letter-spacing: 0.05em;
+}
+.stats-strip {
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.stat {
+  font-family: var(--font-title);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--er-gold-muted);
+}
+.stat-num {
+  color: var(--er-parchment);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-left: 6px;
+}
+
+/* ============================================================
+   Tab bar
+   ============================================================ */
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  border-bottom: 1px solid var(--er-frame-muted);
+  margin-bottom: 8px;
+}
+.tab {
+  flex: 0 1 auto;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 16px 32px;
+  font-family: var(--font-title);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--er-gold-muted);
+  cursor: pointer;
+  transition: all 200ms ease;
+  min-height: 44px;
+}
+.tab:hover { color: var(--er-gold); }
+.tab.active {
+  color: var(--er-gold-bright);
+  border-bottom-color: var(--er-gold);
+  /* inset glow for the active row, per reference §4 */
+  box-shadow: inset 0 -16px 24px -16px rgba(241, 199, 90, 0.28);
+}
+
+/* ============================================================
+   Toolbar (search / author filter / starred toggle)
+   ============================================================ */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  max-width: 920px;
+  margin: 18px auto 8px;
+  padding: 0 16px;
+}
+.toolbar input,
+.toolbar select {
+  background: var(--er-bg-soft);
+  border: 1px solid var(--er-frame-muted);
+  color: var(--er-parchment);
+  font-family: var(--font-body);
+  font-size: 15px;
+  padding: 10px 14px;
+  outline: none;
+  min-height: 44px;
+  flex: 1 1 180px;
+}
+.toolbar input::placeholder {
+  color: var(--er-gold-muted);
+  font-style: italic;
+}
+.toolbar input:focus,
+.toolbar select:focus {
+  border-color: var(--er-gold);
+  box-shadow: inset 0 0 16px rgba(201, 150, 46, 0.10);
+}
+.toolbar select { cursor: pointer; }
+
+/* Buttons (per reference §5) */
+.btn {
+  background: transparent;
+  border: 1px solid var(--er-gold-muted);
+  color: var(--er-gold-muted);
+  font-family: var(--font-title);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  padding: 10px 22px;
+  cursor: pointer;
+  transition: all 200ms ease;
+  min-height: 44px;
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: var(--er-gold);
+  color: var(--er-gold);
+  box-shadow: inset 0 0 18px rgba(201, 150, 46, 0.15);
+}
+.btn.active {
+  border-color: var(--er-gold-bright);
+  color: var(--er-gold-bright);
+  box-shadow: inset 0 0 18px rgba(241, 199, 90, 0.20);
+}
+
+/* ============================================================
+   Tweet feed
+   ============================================================ */
+.feed {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0 16px 60px;
+}
+.tweet {
+  border-top: 1px solid var(--er-frame-muted);
+  padding: 22px 4px;
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 14px;
+  transition: background 200ms ease;
+}
+.tweet:last-child { border-bottom: 1px solid var(--er-frame-muted); }
+.tweet:hover { background: rgba(201, 150, 46, 0.03); }
+
+.avatar {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--er-gold-muted);
+  background: var(--er-bg-soft);
+  font-family: var(--font-title);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--er-gold);
+  /* Sharp corners (per reference §4) — clip a tiny notch on each corner */
+  clip-path: polygon(
+    4px 0, calc(100% - 4px) 0, 100% 4px,
+    100% calc(100% - 4px), calc(100% - 4px) 100%,
+    4px 100%, 0 calc(100% - 4px), 0 4px
+  );
+}
+
+.tweet-body { min-width: 0; }
+.tweet-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 4px;
+}
+.author-name {
+  font-family: var(--font-title);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--er-gold);
+  cursor: pointer;
+}
+.author-name:hover { color: var(--er-gold-bright); }
+.handle {
+  font-style: italic;
+  color: var(--er-gold-muted);
+  font-size: 13px;
+}
+.handle::before { content: "@"; }
+.cat {
+  font-family: var(--font-title);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--er-frame-muted);
+  border: 1px solid var(--er-frame-muted);
+  padding: 1px 8px;
+}
+.timestamp {
+  font-style: italic;
+  font-size: 12px;
+  color: var(--er-gold-muted);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.retweet-tag {
+  font-family: var(--font-title);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--er-frame-muted);
+  text-transform: uppercase;
+}
+
+.tweet-text {
+  color: var(--er-parchment);
+  font-size: 16px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 12px;
+}
+.tweet-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-family: var(--font-title);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.tweet-actions a {
+  color: var(--er-gold-muted);
+  text-decoration: none;
+  transition: color 200ms ease;
+}
+.tweet-actions a:hover { color: var(--er-gold); }
+
+/* Star button — per reference §5 */
+.star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  margin: -6px;
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  transition: filter 200ms ease;
+}
+.star-btn svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+.star-btn .star-stroke {
+  fill: none;
+  stroke: var(--er-gold-muted);
+  stroke-width: 1.4;
+  transition: all 200ms ease;
+}
+.star-btn:hover .star-stroke {
+  stroke: var(--er-gold);
+  filter: drop-shadow(0 0 6px rgba(201, 150, 46, 0.4));
+}
+.star-btn.starred .star-stroke {
+  fill: var(--er-gold-bright);
+  stroke: var(--er-gold-bright);
+  filter: drop-shadow(0 0 8px rgba(241, 199, 90, 0.5));
+}
+/* Particulate motes on activate (per reference §5) */
+@keyframes ember-rise {
+  0%   { opacity: 0; transform: translate(0, 0); }
+  20%  { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(var(--dx, 6px), -22px); }
+}
+.star-btn .ember {
+  position: absolute;
+  width: 2.5px;
+  height: 2.5px;
+  background: var(--er-gold-bright);
+  border-radius: 50%;
+  pointer-events: none;
+  top: 50%; left: 50%;
+  filter: drop-shadow(0 0 3px rgba(241, 199, 90, 0.8));
+}
+
+/* ============================================================
+   Digests tab
+   ============================================================ */
+.digests-list {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0 16px 60px;
+}
+.digest-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 18px;
+  align-items: center;
+  padding: 22px 4px;
+  border-top: 1px solid var(--er-frame-muted);
+}
+.digest-row:last-child { border-bottom: 1px solid var(--er-frame-muted); }
+.digest-row:hover { background: rgba(201, 150, 46, 0.03); }
+.digest-date {
+  font-family: var(--font-title);
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--er-gold);
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+.digest-meta {
+  font-style: italic;
+  color: var(--er-gold-muted);
+  font-size: 14px;
+}
+.digest-meta-num {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--er-parchment);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Modal / digest drawer
+   ============================================================ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 6, 4, 0.85);
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 100;
+  overflow-y: auto;
+  padding: 40px 16px;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--er-bg-soft);
+  border: 1px solid var(--er-gold-muted);
+  max-width: 720px;
+  width: 100%;
+  padding: 28px 32px 36px;
+  position: relative;
+}
+.modal-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  border-bottom: 1px solid var(--er-frame-muted);
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+}
+.modal-title {
+  font-family: var(--font-title);
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--er-gold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.modal-meta {
+  font-style: italic;
+  color: var(--er-gold-muted);
+  font-size: 13px;
+  margin-left: auto;
+}
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: var(--er-gold-muted);
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
+  font-family: var(--font-title);
+  padding: 6px 10px;
+  min-width: 44px;
+  min-height: 44px;
+}
+.modal-close:hover { color: var(--er-gold-bright); }
+.modal-body { color: var(--er-parchment); font-size: 16px; }
+.modal-body h1 {
+  font-family: var(--font-title);
+  font-size: 24px;
+  color: var(--er-gold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--er-frame-muted);
+  padding-bottom: 6px;
+  margin: 28px 0 14px;
+}
+.modal-body h2 {
+  font-family: var(--font-title);
+  font-size: 16px;
+  color: var(--er-gold);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin: 24px 0 10px;
+}
+.modal-body h3 {
+  font-family: var(--font-title);
+  font-size: 13px;
+  color: var(--er-gold-muted);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin: 18px 0 8px;
+}
+.modal-body p { line-height: 1.6; margin: 8px 0; }
+.modal-body strong { color: var(--er-gold); font-weight: 600; }
+.modal-body em { color: var(--er-gold-muted); }
+.modal-body a { color: var(--er-gold); text-decoration: underline dotted var(--er-gold-muted); }
+.modal-body a:hover { color: var(--er-gold-bright); }
+.modal-body ul, .modal-body ol { padding-left: 22px; }
+.modal-body li { margin: 4px 0; }
+.modal-body code {
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 13px;
+  background: rgba(140, 106, 43, 0.12);
+  color: var(--er-parchment);
+  padding: 1px 5px;
+}
+.modal-body hr { border: none; border-top: 1px solid var(--er-frame-muted); margin: 18px 0; }
+
+/* ============================================================
+   Loader (rotating Elden Ring per reference §5)
+   ============================================================ */
+.loader {
+  display: grid;
+  place-items: center;
+  padding: 60px 20px;
+  gap: 14px;
+}
+.loader svg {
+  width: 32px;
+  height: 32px;
+  animation: spin 3s linear infinite;
+}
+.loader svg circle {
+  fill: none;
+  stroke: var(--er-gold-muted);
+  stroke-width: 1.4;
+  stroke-dasharray: 60 100;
+  stroke-linecap: round;
+}
+.loader-text {
+  font-style: italic;
+  color: var(--er-gold-muted);
+  font-size: 13px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ============================================================
+   Empty state
+   ============================================================ */
+.empty {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--er-gold-muted);
+}
+.empty-title {
+  font-family: var(--font-title);
+  font-size: 14px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--er-gold);
+  margin-bottom: 8px;
+}
+.empty-text { font-style: italic; }
+
+/* ============================================================
+   Footer load-more
+   ============================================================ */
+.load-more-wrap {
+  display: grid;
+  place-items: center;
+  padding: 28px 0;
+}
+
+/* ============================================================
+   Custom scrollbar
+   ============================================================ */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--er-bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--er-frame-muted); }
+::-webkit-scrollbar-thumb:hover { background: var(--er-gold-muted); }
+
+/* ============================================================
+   Mobile (≤768px)
+   ============================================================ */
+@media (max-width: 768px) {
+  .site-header { padding: 22px 16px 14px; }
+  .brand { font-size: 20px; letter-spacing: 0.14em; }
+  .tagline { font-size: 12px; }
+  .stats-strip { gap: 16px; margin-top: 10px; }
+  .stat { font-size: 10px; letter-spacing: 0.16em; }
+  .tab { padding: 14px 18px; font-size: 11px; letter-spacing: 0.16em; }
+  .toolbar { padding: 0 12px; gap: 8px; }
+  .toolbar input, .toolbar select { font-size: 14px; padding: 9px 12px; }
+  .feed, .digests-list { padding: 0 12px 60px; }
+  .tweet { grid-template-columns: 40px 1fr; gap: 10px; padding: 18px 0; }
+  .avatar { width: 36px; height: 36px; font-size: 14px; }
+  .tweet-text { font-size: 15px; }
+  .timestamp { margin-left: 0; flex-basis: 100%; }
+  .modal { padding: 22px 18px 28px; }
+  .modal-title { font-size: 18px; }
+  .digest-row { grid-template-columns: 1fr auto; gap: 10px; padding: 18px 0; }
+  .digest-meta { grid-column: 1 / -1; font-size: 13px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <h1 class="brand">AI Leaders Digest</h1>
+  <div class="tagline">chronicles of the demigods</div>
+  <div class="stats-strip" id="stats-strip"></div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="tweets" id="tab-tweets">Tweets</button>
+  <button class="tab" data-tab="digests" id="tab-digests">Digests</button>
+</nav>
+
+<!-- ===================== TWEETS view ===================== -->
+<section id="view-tweets">
+  <div class="toolbar">
+    <input type="search" id="search" placeholder="search the chronicles…">
+    <select id="author-filter">
+      <option value="">All authors</option>
+    </select>
+    <button class="btn" id="starred-toggle">★ Starred only</button>
+  </div>
+  <div class="feed" id="tweet-feed"></div>
+  <div class="load-more-wrap" id="load-more-wrap"></div>
+</section>
+
+<!-- ===================== DIGESTS view ===================== -->
+<section id="view-digests" hidden>
+  <div class="digests-list" id="digest-list"></div>
+</section>
+
+<!-- ===================== Modal ===================== -->
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal" id="modal" role="dialog" aria-modal="true">
+    <button class="modal-close" id="modal-close" aria-label="close">×</button>
+    <header class="modal-header">
+      <h2 class="modal-title" id="modal-title">…</h2>
+      <span class="modal-meta" id="modal-meta"></span>
+    </header>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+const state = {
+  tab: 'tweets',
+  page: 1,
+  pageSize: 50,
+  author: '',
+  query: '',
+  starred: false,
+  loading: false,
+  hasNext: false,
+  authorMap: {},  // handle → {name, category}
+};
+
+const $ = (sel) => document.querySelector(sel);
+
+// ============================================================
+// SVG snippets
+// ============================================================
+const STAR_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true">
+  <path class="star-stroke" d="M12 2.5l2.7 6.4 6.9.6-5.2 4.6 1.6 6.8L12 17.3l-6 3.6 1.6-6.8-5.2-4.6 6.9-.6z"/>
+</svg>`;
+
+const RING_SVG = `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/></svg>`;
+
+function loaderHTML(text) {
+  return `<div class="loader">${RING_SVG}<div class="loader-text">${text}</div></div>`;
+}
+
+function emptyHTML(title, body) {
+  return `<div class="empty"><div class="empty-title">${title}</div><div class="empty-text">${body}</div></div>`;
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.slice(0, 10);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffH = diffMs / 3600000;
+  if (diffH < 1) return Math.max(1, Math.floor(diffMs / 60000)) + 'm';
+  if (diffH < 24) return Math.floor(diffH) + 'h';
+  if (diffH < 24 * 7) return Math.floor(diffH / 24) + 'd';
+  return d.toISOString().slice(0, 10);
+}
+
+function fmtFullDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.slice(0, 10);
+  return d.toISOString().slice(0, 10);
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function avatarInitial(name) {
+  const ch = (name || '?').trim().charAt(0).toUpperCase();
+  return ch || '?';
+}
+
+async function fetchJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// ============================================================
+// Stats strip
+// ============================================================
+async function loadStats() {
+  try {
+    const s = await fetchJSON('/api/stats');
+    const latestStr = s.latest_tweet ? fmtFullDate(s.latest_tweet) : '—';
+    $('#stats-strip').innerHTML = `
+      <span class="stat">Tweets <span class="stat-num">${s.tweets_total}</span></span>
+      <span class="stat">Starred <span class="stat-num">${s.tweets_starred}</span></span>
+      <span class="stat">Sources <span class="stat-num">${s.authors_enabled}</span></span>
+      <span class="stat">Digests <span class="stat-num">${s.summaries_total}</span></span>
+      <span class="stat">Latest <span class="stat-num">${latestStr}</span></span>
+    `;
+  } catch (e) {
+    $('#stats-strip').innerHTML = `<span class="stat">stats unavailable</span>`;
+  }
+}
+
+// ============================================================
+// Authors
+// ============================================================
+async function loadAuthors() {
+  const { authors } = await fetchJSON('/api/authors');
+  state.authorMap = Object.fromEntries(authors.map(a => [a.handle, a]));
+  const sel = $('#author-filter');
+  sel.innerHTML = '<option value="">All authors</option>' +
+    authors.map(a =>
+      `<option value="${escapeHtml(a.handle)}">${escapeHtml(a.name)} · ${a.tweet_count}</option>`
+    ).join('');
+}
+
+// ============================================================
+// Tweets
+// ============================================================
+function tweetCardHTML(t) {
+  const name = t.author_name || t.author;
+  const init = avatarInitial(name);
+  const starredClass = t.starred ? ' starred' : '';
+  const cat = t.category ? `<span class="cat">${escapeHtml(t.category)}</span>` : '';
+  const rt = t.is_retweet ? `<span class="retweet-tag">↻ Retweet</span>` : '';
+  const url = t.url ? `<a href="${escapeHtml(t.url)}" target="_blank" rel="noopener">View on X</a>` : '';
+  return `
+    <article class="tweet" data-tweet-id="${t.id}">
+      <div class="avatar" title="${escapeHtml(name)}">${escapeHtml(init)}</div>
+      <div class="tweet-body">
+        <div class="tweet-meta">
+          <span class="author-name" data-handle="${escapeHtml(t.author)}">${escapeHtml(name)}</span>
+          <span class="handle">${escapeHtml(t.author)}</span>
+          ${cat}
+          ${rt}
+          <span class="timestamp" title="${escapeHtml(t.date)}">${fmtDate(t.date)}</span>
+        </div>
+        <div class="tweet-text">${escapeHtml(t.text)}</div>
+        <div class="tweet-actions">
+          <button class="star-btn${starredClass}" data-action="star" aria-label="star tweet">${STAR_SVG}</button>
+          ${url}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+async function loadTweets({ append = false } = {}) {
+  if (state.loading) return;
+  state.loading = true;
+  const feed = $('#tweet-feed');
+  if (!append) {
+    feed.innerHTML = loaderHTML('the grace is gathering…');
+  }
+
+  const params = new URLSearchParams({
+    page: state.page,
+    page_size: state.pageSize,
+  });
+  if (state.author) params.set('author', state.author);
+  if (state.query) params.set('q', state.query);
+  if (state.starred) params.set('starred', 'true');
+
+  let data;
+  try {
+    data = await fetchJSON('/api/tweets?' + params);
+  } catch (e) {
+    feed.innerHTML = emptyHTML('the lands are still', `(${e.message})`);
+    state.loading = false;
+    return;
+  }
+
+  state.hasNext = data.has_next;
+  const html = data.tweets.map(tweetCardHTML).join('');
+
+  if (!append) {
+    if (data.tweets.length === 0) {
+      feed.innerHTML = emptyHTML('The world has gone silent', 'No tweets match the current filter.');
+    } else {
+      feed.innerHTML = html;
+    }
+  } else {
+    feed.insertAdjacentHTML('beforeend', html);
+  }
+
+  // Load-more
+  const lm = $('#load-more-wrap');
+  lm.innerHTML = state.hasNext
+    ? `<button class="btn" id="load-more-btn">Reveal more</button>`
+    : '';
+  if (state.hasNext) {
+    $('#load-more-btn').addEventListener('click', () => {
+      state.page += 1;
+      loadTweets({ append: true });
+    });
+  }
+
+  state.loading = false;
+}
+
+// ============================================================
+// Star toggle (with ember motes)
+// ============================================================
+async function toggleStar(btn, tweetId) {
+  const wasStarred = btn.classList.contains('starred');
+  const url = `/api/tweets/${tweetId}/${wasStarred ? 'unstar' : 'star'}`;
+  try {
+    await fetchJSON(url, { method: 'POST' });
+  } catch (e) {
+    return;  // silently ignore; user can retry
+  }
+  btn.classList.toggle('starred');
+  if (!wasStarred) emitEmbers(btn);
+  loadStats();  // refresh starred count in header
+}
+
+function emitEmbers(btn) {
+  for (let i = 0; i < 3; i++) {
+    const e = document.createElement('span');
+    e.className = 'ember';
+    const dx = (Math.random() - 0.5) * 14;
+    e.style.setProperty('--dx', dx + 'px');
+    e.style.animation = `ember-rise 600ms ease-out forwards`;
+    btn.appendChild(e);
+    setTimeout(() => e.remove(), 700);
+  }
+}
+
+// ============================================================
+// Digests
+// ============================================================
+async function loadDigests() {
+  const list = $('#digest-list');
+  list.innerHTML = loaderHTML('opening the archive…');
+  let data;
+  try {
+    data = await fetchJSON('/api/summaries');
+  } catch (e) {
+    list.innerHTML = emptyHTML('archive sealed', `(${e.message})`);
+    return;
+  }
+  if (!data.summaries.length) {
+    list.innerHTML = emptyHTML('no chronicles yet', 'No digests have been written.');
+    return;
+  }
+  list.innerHTML = data.summaries.map(s => `
+    <div class="digest-row" data-id="${s.id}">
+      <div class="digest-date">${escapeHtml(s.date)}</div>
+      <div class="digest-meta">
+        <span class="digest-meta-num">${s.tweet_count ?? 0}</span> tweets ·
+        <span class="digest-meta-num">${s.sources_ok ?? 0}/${s.sources_total ?? 0}</span> sources ·
+        <em>${escapeHtml(s.focus_profile || 'default')}</em>
+      </div>
+      <button class="btn" data-action="open">Open</button>
+    </div>
+  `).join('');
+}
+
+async function openDigest(id) {
+  const backdrop = $('#modal-backdrop');
+  $('#modal-title').textContent = 'Loading…';
+  $('#modal-meta').textContent = '';
+  $('#modal-body').innerHTML = loaderHTML('unfurling the parchment…');
+  backdrop.classList.add('open');
+  let s;
+  try {
+    s = await fetchJSON('/api/summaries/' + id);
+  } catch (e) {
+    $('#modal-body').innerHTML = emptyHTML('lost to time', `(${e.message})`);
+    return;
+  }
+  $('#modal-title').textContent = s.date;
+  $('#modal-meta').textContent =
+    `${s.tweet_count ?? 0} tweets · ${s.sources_ok ?? 0}/${s.sources_total ?? 0} sources · ${s.focus_profile || 'default'}`;
+  // marked is loaded from CDN; render markdown to HTML.
+  $('#modal-body').innerHTML = window.marked
+    ? marked.parse(s.content || '')
+    : `<pre style="white-space:pre-wrap">${escapeHtml(s.content || '')}</pre>`;
+  $('#modal-body').scrollTop = 0;
+}
+
+// ============================================================
+// Tab switching
+// ============================================================
+function switchTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll('.tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  $('#view-tweets').hidden = tab !== 'tweets';
+  $('#view-digests').hidden = tab !== 'digests';
+  if (tab === 'digests') loadDigests();
+  if (tab === 'tweets' && !$('#tweet-feed').children.length) {
+    loadTweets();
+  }
+}
+
+// ============================================================
+// Event delegation
+// ============================================================
+document.addEventListener('click', (ev) => {
+  const tabBtn = ev.target.closest('.tab');
+  if (tabBtn) { switchTab(tabBtn.dataset.tab); return; }
+
+  const starBtn = ev.target.closest('.star-btn');
+  if (starBtn) {
+    const t = starBtn.closest('.tweet');
+    if (t) toggleStar(starBtn, t.dataset.tweetId);
+    return;
+  }
+
+  const authorLink = ev.target.closest('.author-name');
+  if (authorLink) {
+    state.author = authorLink.dataset.handle;
+    state.page = 1;
+    $('#author-filter').value = state.author;
+    switchTab('tweets');
+    loadTweets();
+    return;
+  }
+
+  const digestRow = ev.target.closest('.digest-row');
+  if (digestRow && ev.target.closest('[data-action="open"]')) {
+    openDigest(digestRow.dataset.id);
+    return;
+  }
+
+  if (ev.target === $('#modal-backdrop') || ev.target.closest('#modal-close')) {
+    $('#modal-backdrop').classList.remove('open');
+    return;
+  }
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') $('#modal-backdrop').classList.remove('open');
+});
+
+let searchDebounce;
+$('#search').addEventListener('input', (ev) => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => {
+    state.query = ev.target.value.trim();
+    state.page = 1;
+    loadTweets();
+  }, 250);
+});
+
+$('#author-filter').addEventListener('change', (ev) => {
+  state.author = ev.target.value;
+  state.page = 1;
+  loadTweets();
+});
+
+$('#starred-toggle').addEventListener('click', () => {
+  state.starred = !state.starred;
+  $('#starred-toggle').classList.toggle('active', state.starred);
+  state.page = 1;
+  loadTweets();
+});
+
+// ============================================================
+// Boot
+// ============================================================
+(async function init() {
+  await Promise.all([loadStats(), loadAuthors()]);
+  loadTweets();
+})();
+</script>
+</body>
+</html>
