@@ -56,6 +56,15 @@ def load_credentials():
     return user, pw
 
 
+def load_default_recipient():
+    """Return the DIGEST_RECIPIENT from env or <project>/.env, or None if unset."""
+    val = os.environ.get("DIGEST_RECIPIENT")
+    if val:
+        return val
+    env_data = _load_env_file(Path(__file__).resolve().parent / ".env")
+    return env_data.get("DIGEST_RECIPIENT") or None
+
+
 def markdown_to_html(text):
     """Minimal markdown → HTML for digest emails. Stdlib only.
 
@@ -161,11 +170,18 @@ if __name__ == "__main__":
         description="Send a markdown body (from stdin) as an email via Gmail SMTP."
     )
     ap.add_argument("--subject", required=True, help="Email subject line")
-    ap.add_argument("--to", default="brent.wei.liu@gmail.com",
-                    help="Recipient (default: brent.wei.liu@gmail.com)")
+    ap.add_argument("--to", default=None,
+                    help="Recipient (falls back to env DIGEST_RECIPIENT)")
     ap.add_argument("--from", dest="from_addr", default=None,
                     help="From override (default: authenticated GMAIL_USER)")
     args = ap.parse_args()
+
+    recipient = args.to or load_default_recipient()
+    if not recipient:
+        print(json.dumps({
+            "error": "Recipient missing. Pass --to or set DIGEST_RECIPIENT in env / .env"
+        }, ensure_ascii=False))
+        sys.exit(2)
 
     body = sys.stdin.read()
     if not body.strip():
@@ -173,7 +189,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        result = send_email(args.to, args.subject, body, from_addr=args.from_addr)
+        result = send_email(recipient, args.subject, body, from_addr=args.from_addr)
         print(json.dumps(result, ensure_ascii=False))
     except Exception as e:
         print(json.dumps({"error": str(e)}, ensure_ascii=False))

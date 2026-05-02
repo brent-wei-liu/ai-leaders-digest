@@ -51,7 +51,7 @@
 ## 文件结构
 
 ```
-/Users/little_claw/ai-leaders-digest/
+ai-leaders-digest/
 ├── fetcher.py              # 数据层：RSS 抓取、SQLite 存储、查询、管理
 ├── digest_generate.py      # 摘要层：数据加载 + 三步 Prompt 模板输出
 ├── data/
@@ -81,6 +81,12 @@ Scheduled tasks 由 Claude Code 管理（`~/.claude/scheduled-tasks/`）：
 | elonmusk | Elon Musk | tech-leader |
 | jensenhuang | Jensen Huang | tech-leader |
 | paulg | Paul Graham | startup |
+
+## Quick start
+
+1. Configure `.env` (see [Email Setup](#email-setup) below) if you want digest emails.
+2. On first run, the SQLite DB will be auto-created (see `init_db()` in `fetcher.py`). The first `python3 fetcher.py fetch` run will populate it from Nitter RSS — no manual seeding needed.
+3. Register the scheduled tasks per [Setup scheduled tasks](#setup-scheduled-tasks).
 
 ## 核心文件说明
 
@@ -195,6 +201,14 @@ SQLite（`data/ai_leaders.db`），5 张表：
 
 任务由 Claude Code 的 scheduled-tasks 系统管理（`~/.claude/scheduled-tasks/`），无须独立守护进程。
 
+### Setup scheduled tasks
+
+Scheduled tasks are declared in [`schedules.yaml`](./schedules.yaml). To register them on your machine, open Cowork (Claude Code) in this project and say:
+
+> Read schedules.yaml and register every task defined there as a Cowork scheduled task.
+
+Claude will use the `schedule` skill to create each task, copying the relevant SKILL.md (or embedding the inline `script:` for skill-less tasks like `ai-leaders-fetch`) into `~/Documents/Claude/Scheduled/`.
+
 ## Email Setup
 
 `email_sender.py` 是独立 CLI（`echo "$body" | python3 email_sender.py --subject "..."`），通过 Gmail SMTP（`smtp.gmail.com:587 STARTTLS`）真发邮件。配置一次即可：
@@ -203,10 +217,11 @@ SQLite（`data/ai_leaders.db`），5 张表：
 2. 访问 [App Passwords](https://myaccount.google.com/apppasswords) 生成新密码（命名如 `ai-leaders-digest`）
 3. 项目根创建 `.env`（已 gitignore，可参考 `.env.example`）：
    ```
-   GMAIL_USER=brent.wei.liu@gmail.com
+   GMAIL_USER=your.email@example.com
    GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx   # 16 位 App Password，不带空格
+   DIGEST_RECIPIENT=your.email@example.com
    ```
-   或者 export 到 `~/.zshrc`：`export GMAIL_USER=...; export GMAIL_APP_PASSWORD=...`
+   或者 export 到 `~/.zshrc`：`export GMAIL_USER=...; export GMAIL_APP_PASSWORD=...; export DIGEST_RECIPIENT=...`
 
 env 变量优先于 `.env`。未配置时 `email_sender.py` 会以 JSON 错误退出非零，scheduled task 报告里能直接看到失败原因。
 
@@ -220,14 +235,14 @@ echo "hello world" | python3 email_sender.py --subject "Test email"
 
 You should:
 - See `{"sent": true, "to": "...", "subject": "Test email"}` in stdout
-- Receive the email at the configured `--to` address (default: brent.wei.liu@gmail.com)
+- Receive the email at the recipient (`--to` flag if passed, else `DIGEST_RECIPIENT` env var)
 
 If credentials are missing, you'll get `{"error": "Email credentials missing..."}` and exit 1.
 
 ## 手动使用
 
 ```bash
-cd /Users/little_claw/ai-leaders-digest
+cd /path/to/ai-leaders-digest
 
 # 抓取最新推文
 python3 fetcher.py fetch

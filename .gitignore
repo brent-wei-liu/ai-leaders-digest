@@ -1,3 +1,11 @@
 __pycache__/
 *.pyc
 .env
+
+# personal data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/latest_tweets_*.json
+data/.fuse_hidden*
+data/final_digest_*.txt

@@ -1,0 +1,22 @@
+# ai-leaders-digest scheduled tasks (declarative).
+#
+# To register on a fresh machine, open Cowork (Claude Code) in this project
+# and say: "Read schedules.yaml and register every task defined here."
+# The 'schedule' skill will create each task and copy the relevant SKILL.md.
+#
+# Times are local time (assumed PT for this codebase). Skill paths are
+# relative to the project root.
+#
+# {{REPO}} is replaced by the absolute path of this project's root at
+# registration time. Don't hardcode user-specific paths in this file.
+
+- name: ai-leaders-fetch
+  skill: null
+  script: cd {{REPO}} && python3 fetcher.py fetch
+  frequency: every 4h (08:00, 12:00, 16:00, 20:00 PT)
+  description: Pull AI leaders' tweets from Nitter RSS into ai_leaders.db (deduped, partial-source-tolerant).
+
+- name: ai-leaders-digest
+  skill: .claude/skills/ai-leaders-digest
+  frequency: daily 10:00 PT
+  description: Generate daily Chinese digest via Draft/Critique/Refine isolated reflection (3 subagents), save to summaries table, send via email_sender.py.

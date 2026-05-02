@@ -11,7 +11,7 @@ description: >
 
 Generate a daily Chinese-language digest of ~12 AI/tech leaders' recent tweets, using a three-step **isolated reflection** pipeline (Draft → Critique → Refine) that improves analysis quality far beyond a single-shot summary.
 
-**Project root:** `/Users/little_claw/ai-leaders-digest`
+**Project root:** the directory containing this SKILL.md's grand-grandparent (`<project>/.claude/skills/ai-leaders-digest/SKILL.md`). The scheduled-task wrapper or invoking session should `cd` there before running any of the steps below.
 
 ## Workflow
 
@@ -20,7 +20,7 @@ Always `cd` to the project root first.
 ### Step 1 — Refresh tweet data (idempotent)
 
 ```bash
-cd /Users/little_claw/ai-leaders-digest && python3 fetcher.py fetch
+cd <project-root> && python3 fetcher.py fetch
 ```
 
 This pulls the latest Nitter RSS feeds for all enabled authors and inserts new tweets into `data/ai_leaders.db`. Safe to run repeatedly — duplicates are deduped on `tweet_id`. If the call fails for some sources (Nitter is flaky), continue anyway.
@@ -83,7 +83,7 @@ This appends a row to the `summaries` table with today's date, days_back, tweet_
 echo "$FINAL_TEXT" | python3 email_sender.py --subject "AI Leaders Digest 2026-05-02"
 ```
 
-Recipient defaults to `brent.wei.liu@gmail.com`. The standalone `email_sender.py` CLI uses Gmail SMTP (`smtp.gmail.com:587 STARTTLS`) with credentials from env (`GMAIL_USER`, `GMAIL_APP_PASSWORD`) or `<project>/.env` fallback. See README → Email Setup. The body is sent as `multipart/alternative` (raw markdown text part + rendered HTML part).
+Recipient comes from the `DIGEST_RECIPIENT` env var (set in `.env`); pass `--to <addr>` to override. The standalone `email_sender.py` CLI uses Gmail SMTP (`smtp.gmail.com:587 STARTTLS`) with credentials from env (`GMAIL_USER`, `GMAIL_APP_PASSWORD`) or `<project>/.env` fallback. See README → Email Setup. The body is sent as `multipart/alternative` (raw markdown text part + rendered HTML part).
 
 If credentials are missing the script exits non-zero with a JSON error — surface it in the report instead of pretending the email was sent.
 
