@@ -121,6 +121,31 @@ First time accessing from another device, **macOS firewall** will prompt: System
 - Open any historical digest as rendered HTML in a modal
 - Mobile-friendly (≤768 px breakpoint, 44 px touch targets)
 
+## Testing
+
+End-to-end UI regression suite using Playwright (Python). Hits the real local API — does not mock, does not spawn the server itself.
+
+Install once:
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m playwright install chromium
+```
+
+Run (in a separate terminal from the running server):
+
+```bash
+python3 api.py                      # terminal 1 — keep the server up
+pytest tests/ui/                    # terminal 2 — run the suite
+```
+
+Useful flags:
+- `pytest tests/ui/ --headed` — watch the browser drive the page in real time
+- `pytest tests/ui/ -k tab` — run a single test by name fragment
+- `AI_LEADERS_URL=http://192.168.1.x:8081 pytest tests/ui/` — point at a remote / phone-LAN server
+
+The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if the API isn't reachable the suite is cleanly skipped, not failed.
+
 ## 核心文件说明
 
 ### fetcher.py
