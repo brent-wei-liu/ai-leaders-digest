@@ -99,6 +99,9 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # 5s wait when a concurrent writer (api.py) holds the lock — without this
+    # the default 0 makes every overlap a hard SQLITE_BUSY failure.
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
@@ -316,6 +319,14 @@ def cmd_fetch(conn, args=None):
         time.sleep(1)
 
     conn.commit()
+    # Truncate the WAL after the fetch's batch commits so it doesn't grow
+    # unboundedly between checkpoints — automatic checkpoints only run when
+    # the WAL hits ~1000 pages, which on a 4x/day cron with frequent reader
+    # connections from api.py can be deferred indefinitely.
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        pass
     stats["failed_names"] = failed_names
 
     # Determine if we should output a full report

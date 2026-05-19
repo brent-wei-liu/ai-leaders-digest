@@ -21,6 +21,14 @@ def get_conn():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # Without busy_timeout the default is 0 — any concurrent writer hitting a
+    # lock fails immediately with SQLITE_BUSY. ai-leaders-digest runs an
+    # always-on api.py alongside a 4x/day fetcher, and the resulting
+    # contention churn is the most plausible culprit behind the recurring
+    # page-level index corruption (see git history for repeated dump+restore
+    # cycles). 5 seconds is well under any HTTP request timeout but long
+    # enough to absorb a fetcher commit burst.
+    conn.execute("PRAGMA busy_timeout=5000")
     _migrate(conn)
     return conn
 

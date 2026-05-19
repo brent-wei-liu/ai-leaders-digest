@@ -36,6 +36,7 @@ def load_tweets(days=3, profile="default"):
     import sqlite3
 
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA busy_timeout=5000")  # 5s wait vs default 0 — see db.py
     conn.row_factory = sqlite3.Row
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -85,6 +86,7 @@ def save_summary(content, days=3, profile="default"):
     import sqlite3
 
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA busy_timeout=5000")  # 5s wait vs default 0 — see db.py
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     now = datetime.now(timezone.utc).isoformat()
 
@@ -373,6 +375,7 @@ def cmd_stats():
     import sqlite3
 
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA busy_timeout=5000")  # 5s wait vs default 0 — see db.py
     conn.row_factory = sqlite3.Row
 
     for days in [3, 7]:
