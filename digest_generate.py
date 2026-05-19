@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-AI Leaders Digest — 数据加载 + 三步 Prompt 模板，供 Hermes cron job 编排。
+AI Leaders Digest — 数据加载 + 三步 Prompt 模板。
 
-去掉了 OpenClaw Gateway API 依赖，LLM 调用由 Hermes delegate_task 完成，
-三个 subagent 相互隔离，等价于原来的 isolated session。
+Pipeline: Extract → Context → Summarize (three isolated subagents).
+Replaces the older Draft → Critique → Refine flow, which forced the
+Critique step to invent cross-author "insights" on thin tweet days.
 
 Usage:
-  python3 digest_generate.py query [--days 3] [--profile default]
-      → 输出推文数据 JSON（供 cron script 注入）
+  python3 digest_generate.py query [--days 5] [--profile default]
+      → 输出推文数据 JSON（含 extract/context_template/summarize_template）
 
-  python3 digest_generate.py save-summary [--days 3] [--profile default]
+  python3 digest_generate.py save-summary [--days 5] [--profile default]
       → 从 stdin 读取摘要文本，保存到 DB
 
   python3 digest_generate.py stats
@@ -102,15 +103,21 @@ def save_summary(content, days=3, profile="default"):
     return {"saved": True, "date": today, "tweet_count": tweet_count}
 
 
-# ── Three-Step Prompt Templates ──────────────────────────────────────
-# 保留原来的三步隔离设计，由 Hermes delegate_task 编排
+# ── Three-Step Pipeline Prompt Templates ─────────────────────────────
+# Pipeline (NOT reflection): Extract → Context → Summarize.
+# Replaces the older Draft → Critique → Refine flow that forced the
+# Critique step to invent cross-author "insights" on thin tweet days.
+# The new flow's job is: faithfully summarize what each person said,
+# with web-fetched background for the substantive items. No forced
+# pattern-mining, no editorial cuts disguised as critique.
 
-DRAFT_PROMPT = """你是一位资深 AI 行业分析师，为 AI/ML 从业者撰写摘要。
-你的任务是 INTERPRET（解读），而非简单报道。找出模式，解释意义，连接线索。
-中文评论，英文人名/术语。简洁、适合手机阅读。
+EXTRACT_PROMPT = """你是 AI 领袖推文摘要流水线的第 1 步：分拣。
 
-推文数据存储在 JSON 文件中。请用 read_file 工具读取完整文件：
-文件路径：{tweets_file}
+任务：把按作者分组的推文按"信号值"分类。不要写摘要，不要做洞察——
+只做忠实分拣。
+
+输入：JSON 文件，按作者 handle 分组。
+路径：{tweets_file}
 
 文件结构（按作者 handle 分组）：
 {{
@@ -121,8 +128,7 @@ DRAFT_PROMPT = """你是一位资深 AI 行业分析师，为 AI/ML 从业者撰
       {{"date": "<ISO8601>", "text": "<推文正文>", "is_retweet": true/false}},
       ...
     ]
-  }},
-  ...
+  }}
 }}
 
 元信息：
@@ -131,96 +137,153 @@ DRAFT_PROMPT = """你是一位资深 AI 行业分析师，为 AI/ML 从业者撰
 - Sources：{sources_ok}/{sources_total}
 - 日期：{date}
 
-请按以下格式生成摘要：
+请用 Read 工具读取完整文件。然后对每条推文判断：
+
+**substantive（实质性）** —— 满足任一即可：
+- 提及具体论文 / 产品发布 / 数据集 / benchmark 数字
+- 宣布公司动态（融资、收购、人事、产品线变动）
+- 透露技术细节或路线选择
+- 公开战略表态（定价、合作、市场）
+- 回应/挑战另一位 AI 领袖
+- 描述具体工作流 / 工具使用 / 实测结果
+
+**filler（噪声）** —— 全部归入：
+- 转推（除非被转推的内容本身满足 substantive 标准；那样保留为 substantive）
+- 个人日常 / 度假 / 段子 / 表情
+- 与 AI 无关的政治 / 文化战 / 体育 / 名人八卦
+- 单纯祝贺 / 致谢 / "thank you" / "amazing"
+- 招聘广告（除非附带具体团队信息）
+
+{focus_instructions}
+
+可选 web 调用（最多 **2 次**）：仅当推文里出现一个你完全不认识的实体
+（人名、公司名、产品名）且不确定它是不是 substantive 维度的依据时做一次
+WebSearch。**不要**用 web 调用做事实校验——那是下一步的事。
+
+输出格式（**严格 JSON**，放在一个 ```json 代码块里，外面不要再写其他文字）：
+
+```json
+{{
+  "<handle>": {{
+    "name": "<显示名>",
+    "category": "<category>",
+    "substantive": [
+      {{
+        "date": "<ISO8601>",
+        "text": "<原文，保留 emoji 和 URL>",
+        "tag": "paper|product|company|strategy|reply|workflow|other",
+        "is_retweet": true/false
+      }}
+    ],
+    "filler_count": <整数>,
+    "filler_summary": "<一句话概括 filler 推文的主题分布，例如 '主要是英国言论自由+FSD 转推'>"
+  }}
+}}
+```
+
+预算：2 次 web 调用，硬上限。"""
+
+CONTEXT_PROMPT = """你是 AI 领袖推文摘要流水线的第 2 步：背景调研。
+
+任务：为每条 substantive 推文添加事实背景。
+
+**重要**：你看不到原始推文文件——只有上一步抽出的 substantive 列表。
+这是设计如此：你的工作是验证和扩展 list 里这些条目，而不是重新做分拣。
+
+上一步输出的 JSON：
+
+{extracted}
+
+对**每条 substantive 推文**，目标是回答：
+- 推文提到的论文 / 产品 / 事件，**它是什么**？（1-2 句话）
+- 关键的客观数字（论文成绩、产品价格、benchmark 分数、融资金额）能不能补全？
+- 推文回应或挑战谁？原线索是什么？
+- 提到的公司 / 人物当前的角色 / 状态是否与推文一致？
+
+可选 web 调用（最多 **12 次，硬上限**）：
+- WebSearch: 找论文 abstract / 产品页 / 公司新闻
+- WebFetch: 拉具体的产品发布页或 arXiv abstract
+- 12 次平均分配 ≈ 一个作者约 1-2 次；substantive 列表更长就更省。
+- 优先级：含具体名词（产品 / 论文 / 公司 / benchmark）的推文 > 抽象观点推文
+
+输出格式（**严格 JSON**，放在一个 ```json 代码块里）：保持上一步结构，
+在每条 substantive 后**新增**两个字段：
+- `context`: 一段中文背景（1-3 句），如果没必要做 web 调用可以写 "自明"
+- `sources`: URL 数组，记录用到的 web 资源；没用就空数组 `[]`
+
+不要修改 `name` / `category` / `filler_*` 字段。
+不要删任何 substantive 项目，即使你觉得它不重要——分拣是上一步的事。
+
+预算：12 次 web 调用，硬上限。"""
+
+SUMMARIZE_PROMPT = """你是 AI 领袖推文摘要流水线的第 3 步：写作。
+
+任务：基于上一步加了背景的 JSON，写一份**忠实**的中文 digest。
+**不要**硬挤跨人物 insight，**不要**做"→ 意味着什么"的二阶推论。
+如果某天领袖们说的事就是平淡，digest 就应该读起来平淡——这是诚实，不是失败。
+
+**重要**：你只看 contexted JSON，不重新读原始推文。**不要**做 web 调用。
+
+上一步输出的 JSON：
+
+{contexted}
+
+输出格式（**严格按以下 4 段**）：
 
 📰 AI Leaders Digest - {date}
 (过去 {days} 天，{tweet_count} 条内容，{sources_ok}/{sources_total} sources)
 
-🔮 本期洞察 (Analyst Take)
-放在最前面，3-5 个要点：
-- 跨人物模式：多位领袖不约而同讨论同一主题时，这种趋同意味着什么？
-- "So what" 分析：为什么重要，对行业意味着什么
-- 反常识/意外观点：领袖们在哪些方面有分歧？字里行间在说什么？
-- 前瞻：从业者接下来该关注什么？
-- 要具体且有观点。不要写"AI安全正在被讨论"，要写"Bengio 的 UN 欺骗警告 + Karpathy 的供应链提醒表明安全对话正从理论对齐转向即时运营风险"
+---
 
-🔥 话题聚合
-按话题分组，每个话题：
-- 列出相关帖子及作者
-- 用中文加 1-2 句上下文
-- 每个话题最后加粗"→ 意味着什么："——连接作者未连接的点，指出未被提及的内容，或解释二阶影响
+✨ 本期亮点（2-3 条）
 
-{focus_instructions}
+挑信息密度最高的 2-3 条 substantive 推文。判断标准是**有具体新东西**
+（论文成绩、产品上线、人事变动、benchmark 数字）——**不是**作者的名气。
+每条 1 段：
+- 第一句：谁说了什么（中文转述 + 关键英文术语保留）
+- 第二句起：context（从 JSON 里来的 1-2 句背景）
+- 最后一句（**可选**）：如果你看出一个**显然的**对从业者的含义，写一句；
+  如果觉得勉强，**不写**
 
-👤 人物动态
-每位发帖者一条简短中文要点，包括他们当前的战略姿态（在推动什么，为什么）。
+---
 
-保持简洁、手机友好。
-只输出摘要正文，不要元评论。"""
+👤 逐人小记
 
-CRITIQUE_PROMPT = """你是一位犀利的编辑审稿人，负责审阅 AI 行业摘要。
-你没有看过原始推文——你只能评估摘要本身的质量。
-你的任务是发现分析质量的弱点，而非事实准确性。
-具体、直接、有建设性。用中文写。
+按 substantive 推文数从多到少排序。每位作者**一段**：
 
-审阅以下 AI Leaders Digest 初稿：
+格式：**作者名 (@handle)**：把 substantive 列表里的内容用第三人称中文转述，
+每条尾随该条的 context（"背景：..."）。如果有 filler，最后用一句话点出
+（不要详细列）。
 
-DRAFT:
-{draft}
+如果作者**没有 substantive**（全是 filler）：只写
+"**作者名 (@handle)**：仅日常推文（{{filler_summary}}），无重要信号。"
 
-评估标准：
+**不要**写"战略姿态"或"在推动什么"——那是上一版的硬挤产物，已删除。
+**忠实转述 + 背景补全**就够了。
 
-1. **洞察质量 (Insight Quality)**
-   - 本期洞察是否包含超越事实复述的真正分析？
-   - 一位资深 AI 工程师能否从中学到自己读推文学不到的东西？
-   - 识别出的模式是真正的跨人物趋同，还是牵强附会？
+---
 
-2. **"So What" 检验**
-   - 每个"→ 意味着什么"是否真正增加了洞察？
-   - 如果读起来像"X 很重要因为它是大事"——标记为弱
-   - 是否解释了二阶影响，还是只是复述一阶事实？
+🐕 沉默的狗
 
-3. **信号 vs 噪音 (Signal vs Noise)**
-   - 摘要是否给了真正重要的信号相应的篇幅？
-   - 还是像新闻通讯社一样平均覆盖所有内容？
-   - 什么应该得到更多关注？什么应该砍掉？
+列出 enabled 但本期窗口内 0 条推文的作者。每人一行：
+`**作者名 (@handle)**: 0 条`
 
-4. **遗漏与盲点 (Blind Spots)**
-   - 是否遗漏了领袖之间有趣的紧张关系或分歧？
-   - 是否有"沉默的狗"（预期话题上的显著沉默）？
-   - 不同话题簇之间是否有非显而易见的联系？
+如果所有 enabled 作者都有推文，写一句 "本期所有作者均有推文。" 即可。
 
-5. **可读性 (Readability)**
-   - 手机友好吗？太长？太密？
-   - 中文是否自然简洁？
+---
 
-对发现的每个弱点，提供具体改进建议。
-最后给出总体质量评分：A（可直接发布）、B（需小修）、C（需大改）。"""
+写作要求：
+- 中文为主，英文人名 / 产品 / 术语保留
+- 段落式叙述；除"沉默的狗"外不要列项符
+- 每个 substantive 推文都要被覆盖；**不要**因为"觉得不重要"就跳过
+- 字数不限——该长则长，该短则短
 
-REFINE_PROMPT = """你是一位资深 AI 行业分析师，正在制作摘要的最终版本。
-你有原始初稿和编辑反馈。请产出改进后的最终版本。
-解决每一个审稿意见。强化弱洞察。砍掉水分。让每句话都有存在价值。
-中文评论，英文人名/术语。简洁、适合手机阅读。
-
-原始初稿：
-{draft}
-
-编辑审稿意见：
-{critique}
-
-规则：
-- 解决每一个具体的审稿意见
-- 洞察被标记为弱的，要么用非显而易见的观点强化，要么砍掉
-- "→ 意味着什么"被标记为显而易见的，要么变得不显而易见，要么删除该话题簇
-- 信噪比失衡的，重新分配关注度
-- 补充审稿人识别出的遗漏联系或盲点
-- 最终输出只有改进后的摘要正文（不要关于修改的元评论）
-- 保持相同的格式结构"""
+预算：0 次 web 调用。所有信息都在 contexted JSON 里。"""
 
 
 # ── Commands ─────────────────────────────────────────────────────────
 
-def cmd_query(days=3, profile="default"):
+def cmd_query(days=5, profile="default"):
     """输出元信息 + prompt 模板 JSON 到 stdout；推文数据写到磁盘文件。
 
     为避免父 agent 的 API payload 过大导致 TTFT 超时（>10min），
@@ -267,7 +330,8 @@ def cmd_query(days=3, profile="default"):
             "tweets_file": str(tweets_file),
         },
         "prompts": {
-            "draft": DRAFT_PROMPT.format(
+            # Step 3: read raw tweets, classify substantive vs filler
+            "extract": EXTRACT_PROMPT.format(
                 days=days,
                 tweets_file=str(tweets_file),
                 date=today,
@@ -276,15 +340,24 @@ def cmd_query(days=3, profile="default"):
                 sources_total=data["sources_total"],
                 focus_instructions=focus_instructions,
             ),
-            "critique_template": CRITIQUE_PROMPT,
-            "refine_template": REFINE_PROMPT,
+            # Step 4: background lookup on substantive items (no raw tweets)
+            "context_template": CONTEXT_PROMPT,
+            # Step 5: write the digest from contexted JSON (no web, no raw tweets)
+            "summarize_template": SUMMARIZE_PROMPT.format(
+                date=today,
+                days=days,
+                tweet_count=data["tweet_count"],
+                sources_ok=data["sources_ok"],
+                sources_total=data["sources_total"],
+                contexted="{contexted}",  # left as placeholder; SKILL.md fills it in
+            ),
         },
     }
 
     print(json.dumps(output, ensure_ascii=False))
 
 
-def cmd_save(days=3, profile="default"):
+def cmd_save(days=5, profile="default"):
     """从 stdin 读取摘要，保存到 DB。"""
     content = sys.stdin.read().strip()
     if not content:
@@ -328,7 +401,7 @@ def main():
     args = sys.argv[2:]
 
     if cmd == "query":
-        kwargs = {"days": 3, "profile": "default"}
+        kwargs = {"days": 5, "profile": "default"}
         i = 0
         while i < len(args):
             if args[i] == "--days" and i + 1 < len(args):
@@ -340,7 +413,7 @@ def main():
         cmd_query(**kwargs)
 
     elif cmd == "save-summary":
-        kwargs = {"days": 3, "profile": "default"}
+        kwargs = {"days": 5, "profile": "default"}
         i = 0
         while i < len(args):
             if args[i] == "--days" and i + 1 < len(args):

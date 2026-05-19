@@ -2,14 +2,16 @@
 name: ai-leaders-digest
 description: >
   Generate a daily Chinese-language digest of AI leaders' tweets via a
-  three-step Draft / Critique / Refine reflection pipeline. Use when the user
+  three-step Extract → Context → Summarize pipeline. Use when the user
   asks for an AI leaders digest, daily AI digest, AI 大佬日报, AI 领袖摘要,
-  reflection digest run, or when this task fires on schedule.
+  or when this task fires on schedule.
 ---
 
 # AI Leaders Digest
 
-Generate a daily Chinese-language digest of ~12 AI/tech leaders' recent tweets, using a three-step **isolated reflection** pipeline (Draft → Critique → Refine) that improves analysis quality far beyond a single-shot summary.
+Generate a Chinese-language digest of ~12 AI/tech leaders' recent tweets, using a three-step **pipeline** (Extract → Context → Summarize) with isolated subagents and explicit per-step responsibilities.
+
+This **replaces** the older Draft → Critique → Refine reflection design. The old design forced the Critique step to invent cross-author "insights" on thin tweet days, which produced strained patterns and hollow "→ 意味着什么" lines. The new design's job is to faithfully summarize what each person said and add factual background — no forced pattern-mining, no editorial cuts disguised as critique.
 
 **Project root:** the directory containing this SKILL.md's grand-grandparent (`<project>/.claude/skills/ai-leaders-digest/SKILL.md`). The scheduled-task wrapper or invoking session should `cd` there before running any of the steps below.
 
@@ -19,15 +21,15 @@ Always `cd` to the project root first.
 
 ### Web tool budget (applies across Steps 3 / 4 / 5)
 
-Each subagent may use `WebSearch` and `WebFetch` to verify or enrich content. **Hard cap = 20 calls total across all three steps**, split as:
+Each subagent may use `WebSearch` and `WebFetch` to verify or enrich content. **Hard cap = 14 calls total across all three steps**, weighted toward Context which is the real fact-grounding step:
 
 | Step | Budget | Use it for |
 |------|--------|------------|
-| Draft (3) | **5** | filling in author / company context the tweets don't include (recent news a tweet alludes to, a paper a tweet cites, what a referenced product actually is) |
-| Critique (4) | **10** | fact-checking claims in the draft, verifying named entities, catching wrong attributions or stale interpretations |
-| Refine (5) | **5** | resolving the specific factual corrections the critique flagged |
+| Extract (3) | **2** | only when an unfamiliar named entity in a tweet makes substantive-vs-filler classification ambiguous — NOT for fact-checking |
+| Context (4) | **12** | per-substantive-tweet background lookup: find the abstract of a referenced paper, the product page of a launched product, the original thread of a reply, the current role of a person mentioned |
+| Summarize (5) | **0** | pure synthesis from the contexted JSON — no new lookups |
 
-When spawning each subagent, tell it explicitly: "you have N web tool calls available — use them on the highest-value facts first." Do not exceed the per-step budget; running over starves later steps. The budget is a hard ceiling, not a target — using fewer calls is fine if the content is solid.
+When spawning each subagent, tell it explicitly: "you have N web tool calls available — use them on the highest-value facts first." Do not exceed the per-step budget. The budget is a hard ceiling, not a target — using fewer calls is fine.
 
 ### Step 1 — Refresh tweet data (idempotent)
 
@@ -40,52 +42,58 @@ This pulls the latest Nitter RSS feeds for all enabled authors and inserts new t
 ### Step 2 — Build orchestration payload
 
 ```bash
-python3 digest_generate.py query --days 3 --profile default
+python3 digest_generate.py query --days 5 --profile default
 ```
 
 Returns a JSON object with:
 - `meta`: `days`, `date`, `tweet_count`, `sources_ok`, `sources_total`, `tweets_file`, `focus_instructions`
-- `prompts.draft`: the Draft prompt with placeholders already filled in
-- `prompts.critique_template`: the Critique prompt template (raw, expects `{draft}`)
-- `prompts.refine_template`: the Refine prompt template (raw, expects `{draft}` and `{critique}`)
+- `prompts.extract`: the Extract prompt with placeholders already filled in (`tweets_file`, `days`, `date`, counts, focus_instructions)
+- `prompts.context_template`: the Context prompt template (raw, expects `{extracted}`)
+- `prompts.summarize_template`: the Summarize prompt template (already templated with `date`, counts; expects `{contexted}`)
 
 If `tweet_count` is 0, abort and report — no fresh data.
 
-The full tweet bodies are written to `meta.tweets_file` (default `data/latest_tweets_default.json`). The Draft subagent reads this file via `Read`; it must NOT be passed inline as text (too large).
+The full tweet bodies are written to `meta.tweets_file` (default `data/latest_tweets_default.json`). The Extract subagent reads this file via `Read`; it must NOT be passed inline as text (too large). Subsequent subagents (Context, Summarize) do NOT read this file — they work from the JSON produced by the previous step.
 
-### Step 3 — Draft (subagent #1)
+Window note: `--days 5` (not 3). Three days is too narrow when a single quiet day reduces the signal pool to two days. Five days gives enough buffer to absorb a quiet day without producing thin output.
 
-Spawn an Agent with `subagent_type=general-purpose`. Give it:
-- **Prompt**: `prompts.draft` returned by Step 2 (already includes the `tweets_file` path inline as plain text instructions)
-- **Goal**: produce the initial digest in the format specified by the prompt
+### Step 3 — Extract (subagent #1, reads raw tweets file)
 
-**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to fill in context the tweets don't include — what a referenced product is, the paper a tweet cites, the news event a tweet alludes to, the org someone joined. Use these on the most consequential references (the ones your analysis hangs on). Stay within 5 calls."
+This is the sorting step. The subagent reads the raw tweets and classifies each one as **substantive** (concrete paper / product / company news / technical detail / strategic decision / reply to another leader / specific workflow result) or **filler** (retweet of a non-substantive item, personal life, off-AI politics, generic congrats, etc.).
 
-Capture the returned draft text. Do not strip or reformat.
-
-### Step 4 — Critique (subagent #2, **DATA-ISOLATED but web-enabled**)
-
-This step is the heart of the pipeline. The critique subagent **must not** see the raw tweets — it can only judge the draft on its own merits. This is what catches lazy "X is important because it's important" tautologies that a single-pass writer wouldn't notice.
-
-Spawn an Agent with `subagent_type=general-purpose`. Give it ONLY:
-- The Critique template (`prompts.critique_template`) with `{draft}` substituted to the Step 3 output
-- **Do NOT mention `tweets_file`, do NOT pass the tweet JSON path, do NOT include any tweet content.** Even if the subagent has Read tool access, it should have no idea what tweet file to look at.
-
-**However, append to the prompt**: "You may use WebSearch / WebFetch up to **10 times** to fact-check claims the draft makes — verify a quoted statistic, confirm a person's current role/affiliation, validate that an event happened the way the draft frames it, or look up whether a referenced paper/launch is real. Web access is for *verification of claims in the draft*, not for re-fetching the original tweet stream. Spend the budget on the highest-value fact-checks first — wrong attributions, dates, and named entities typically beat prose-quality nits."
-
-This is the largest budget on purpose — a critic who can verify facts beats a critic working from the prose alone, especially for named-entity claims.
-
-Capture the critique text (which ends with grade A / B / C).
-
-### Step 5 — Refine (subagent #3)
+It does NOT write any summary. It does NOT make insight claims. It only sorts.
 
 Spawn an Agent with `subagent_type=general-purpose`. Give it:
-- The Refine template (`prompts.refine_template`) with `{draft}` and `{critique}` substituted from Steps 3 and 4
-- **Goal**: produce the final digest, addressing every critique point
+- **Prompt**: `prompts.extract` returned by Step 2 (already includes the `tweets_file` path and structure docs inline)
+- **Goal**: emit a strict JSON block grouped by author, with `substantive` array + `filler_count` + `filler_summary` per author
 
-**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to resolve specific factual corrections the critique flagged (e.g. confirming a corrected role/title, the right name of a product, a precise date). Don't re-litigate the critique — use the budget only when correcting a flagged fact requires a lookup."
+**Append to the prompt**: "You may use WebSearch up to **2 times** if an unfamiliar entity in a tweet makes substantive-vs-filler classification ambiguous. Do NOT use web for fact-checking — that is the Context step's job. If you don't need the budget, don't use it."
 
-Capture the final text.
+Capture the JSON output. Parse the ```json``` code block out — the subagent's reply may wrap it in narration. The downstream Context step receives this JSON, not the raw tweets file.
+
+### Step 4 — Context (subagent #2, **isolated from raw tweets**)
+
+The Context subagent never sees `tweets_file`. It only sees the JSON produced by Extract. Its job is to add **factual background** to each substantive tweet — what the referenced paper / product / event actually is, key objective numbers if any, whether a person's claimed role is current. This is real fact-grounding, replacing the old Critique step's prose-quality nits.
+
+Spawn an Agent with `subagent_type=general-purpose`. Give it:
+- The Context template (`prompts.context_template`) with `{extracted}` substituted to the Step 3 JSON output (the parsed code block content)
+- **Do NOT mention `tweets_file`, do NOT pass the tweet JSON path, do NOT include the original tweet content beyond what's in the extracted JSON.**
+
+**Append to the prompt**: "You may use WebSearch / WebFetch up to **12 times, hard ceiling**. Spend more on tweets that name a specific paper / product / company / benchmark; spend less or zero on abstract opinions. Don't burn calls fact-checking author opinions — fact-check named entities and concrete claims."
+
+Capture the JSON output. The subagent should return the same structure as Extract, with each substantive item now carrying `context` (1-3 Chinese sentences) and `sources` (URL list, possibly empty).
+
+### Step 5 — Summarize (subagent #3, **no web, no raw tweets**)
+
+The Summarize subagent produces the final Chinese digest. It reads only the JSON from Context. It does NOT do web lookups. It is **not** allowed to invent cross-author "insights" or "→ 意味着什么" lines — that's exactly the failure mode the old Critique step amplified. Its mandate is faithful transcription + background.
+
+Spawn an Agent with `subagent_type=general-purpose`. Give it:
+- The Summarize template (`prompts.summarize_template`) with `{contexted}` substituted to the Step 4 JSON output
+- **Do NOT pass `tweets_file` or the raw extracted JSON.**
+
+**Append to the prompt**: "You have **0** web calls. All facts come from the contexted JSON. If something is missing from JSON, omit it — don't invent."
+
+Capture the final text. This is the digest that goes to Step 6 (save) and Step 7 (Gmail draft).
 
 ### Step 6 — Save to DB (MANDATORY — must succeed before Step 7)
 
@@ -96,7 +104,7 @@ Write the final text to a temp file (heredoc-safe), then pipe into save-summary.
 ```bash
 TMP=$(mktemp -t ai_leaders_digest.XXXXXX.md)
 printf '%s' "$FINAL_TEXT" > "$TMP"
-SAVE_RESULT=$(python3 digest_generate.py save-summary --days 3 --profile default < "$TMP")
+SAVE_RESULT=$(python3 digest_generate.py save-summary --days 5 --profile default < "$TMP")
 echo "$SAVE_RESULT"   # expect {"saved": true, "date": "YYYY-MM-DD", ...}
 ```
 
@@ -196,144 +204,28 @@ If the Gmail MCP isn't available, surface that to the user — do not silently f
 
 Print briefly:
 - Tweet count + sources used
-- Critique grade (A / B / C)
+- Per-step output: extract author-count, context substantive-count + web calls used, summarize char-count
 - "Saved digest for {date}" + draft status (created with id `<id>` / Gmail MCP unavailable / error)
 
-## The three prompt templates (verbatim, embedded for self-containment)
+## Prompt templates
 
-These are duplicated in `digest_generate.py` and produced inside the JSON returned by Step 2 — but kept here so the skill's intent is auditable on its own.
+The three prompt strings are defined in `digest_generate.py` (`EXTRACT_PROMPT`, `CONTEXT_PROMPT`, `SUMMARIZE_PROMPT`) and emitted via `query` in Step 2's JSON under `prompts.extract` / `prompts.context_template` / `prompts.summarize_template`. They are not duplicated here — single source of truth.
 
-### DRAFT_PROMPT
+Their high-level intent, for auditability:
 
-```
-你是一位资深 AI 行业分析师，为 AI/ML 从业者撰写摘要。
-你的任务是 INTERPRET（解读），而非简单报道。找出模式，解释意义，连接线索。
-中文评论，英文人名/术语。简洁、适合手机阅读。
+**EXTRACT** — Input: raw tweets JSON file path. Output: same author-grouped structure but each tweet is now in either a `substantive[]` array (with a `tag` for paper / product / company / strategy / reply / workflow) or counted into `filler_count` with a one-line `filler_summary`. The subagent does NOT write any summary, only sorts. Web budget 2 (rarely needed; for ambiguous entities only).
 
-推文数据存储在 JSON 文件中。请用 read_file 工具读取完整文件：
-文件路径：{tweets_file}
+**CONTEXT** — Input: the Extract JSON only (no raw tweets). Output: same structure with each substantive item gaining a `context` (1-3 Chinese sentences of factual background) and `sources` (URL list). The subagent does NOT re-classify. Web budget 12 (heavy lookups: paper abstracts, product pages, original threads of replies, role confirmations).
 
-文件结构（按作者 handle 分组）：
-{
-  "<handle>": {
-    "name": "<显示名>",
-    "category": "<ai-pioneer/tech-leader/startup/...>",
-    "tweets": [
-      {"date": "<ISO8601>", "text": "<推文正文>", "is_retweet": true/false},
-      ...
-    ]
-  },
-  ...
-}
+**SUMMARIZE** — Input: the Context JSON only (no raw tweets, no web). Output: a four-section Chinese digest with the header, **本期亮点** (2-3 high-density items), **逐人小记** (one paragraph per substantive author, faithful transcription + context — no forced strategic poses or "意味着什么"), and **🐕 沉默的狗** (enabled authors with 0 tweets in the window). Length not enforced — writes as long or short as the contexted JSON warrants.
 
-元信息：
-- 时间范围：过去 {days} 天
-- 推文总数：{tweet_count} 条
-- Sources：{sources_ok}/{sources_total}
-- 日期：{date}
+## Why this pipeline replaces Draft → Critique → Refine
 
-请按以下格式生成摘要：
+The old Critique step was tasked with grading "insight quality" of a draft it couldn't trace back to source. On thin tweet days that meant the Refine step rewrote with **harder pattern claims** to placate the critique — which produced strained "→ 意味着什么" lines that weren't actually in the data. The output read sharper but was less faithful.
 
-📰 AI Leaders Digest - {date}
-(过去 {days} 天，{tweet_count} 条内容，{sources_ok}/{sources_total} sources)
+The new pipeline factors the work cleanly:
+- **Sorting** is its own step. No analysis pressure.
+- **Fact-grounding** is its own step. Replaces "fact-checking the draft" with "actually fetching the context the tweet pointed at."
+- **Writing** has no analytic mandate beyond faithful transcription. If the data is thin, the digest is short. That's honest, not a failure.
 
-🔮 本期洞察 (Analyst Take)
-放在最前面，3-5 个要点：
-- 跨人物模式：多位领袖不约而同讨论同一主题时，这种趋同意味着什么？
-- "So what" 分析：为什么重要，对行业意味着什么
-- 反常识/意外观点：领袖们在哪些方面有分歧？字里行间在说什么？
-- 前瞻：从业者接下来该关注什么？
-- 要具体且有观点。不要写"AI安全正在被讨论"，要写"Bengio 的 UN 欺骗警告 + Karpathy 的供应链提醒表明安全对话正从理论对齐转向即时运营风险"
-
-🔥 话题聚合
-按话题分组，每个话题：
-- 列出相关帖子及作者
-- 用中文加 1-2 句上下文
-- 每个话题最后加粗"→ 意味着什么："——连接作者未连接的点，指出未被提及的内容，或解释二阶影响
-
-{focus_instructions}
-
-👤 人物动态
-每位发帖者一条简短中文要点，包括他们当前的战略姿态（在推动什么，为什么）。
-
-保持简洁、手机友好。
-只输出摘要正文，不要元评论。
-```
-
-### CRITIQUE_PROMPT (isolated — no access to original tweets)
-
-```
-你是一位犀利的编辑审稿人，负责审阅 AI 行业摘要。
-你没有看过原始推文——你只能评估摘要本身的质量。
-你的任务是发现分析质量的弱点，而非事实准确性。
-具体、直接、有建设性。用中文写。
-
-审阅以下 AI Leaders Digest 初稿：
-
-DRAFT:
-{draft}
-
-评估标准：
-
-1. **洞察质量 (Insight Quality)**
-   - 本期洞察是否包含超越事实复述的真正分析？
-   - 一位资深 AI 工程师能否从中学到自己读推文学不到的东西？
-   - 识别出的模式是真正的跨人物趋同，还是牵强附会？
-
-2. **"So What" 检验**
-   - 每个"→ 意味着什么"是否真正增加了洞察？
-   - 如果读起来像"X 很重要因为它是大事"——标记为弱
-   - 是否解释了二阶影响，还是只是复述一阶事实？
-
-3. **信号 vs 噪音 (Signal vs Noise)**
-   - 摘要是否给了真正重要的信号相应的篇幅？
-   - 还是像新闻通讯社一样平均覆盖所有内容？
-   - 什么应该得到更多关注？什么应该砍掉？
-
-4. **遗漏与盲点 (Blind Spots)**
-   - 是否遗漏了领袖之间有趣的紧张关系或分歧？
-   - 是否有"沉默的狗"（预期话题上的显著沉默）？
-   - 不同话题簇之间是否有非显而易见的联系？
-
-5. **可读性 (Readability)**
-   - 手机友好吗？太长？太密？
-   - 中文是否自然简洁？
-
-对发现的每个弱点，提供具体改进建议。
-最后给出总体质量评分：A（可直接发布）、B（需小修）、C（需大改）。
-```
-
-### REFINE_PROMPT
-
-```
-你是一位资深 AI 行业分析师，正在制作摘要的最终版本。
-你有原始初稿和编辑反馈。请产出改进后的最终版本。
-解决每一个审稿意见。强化弱洞察。砍掉水分。让每句话都有存在价值。
-中文评论，英文人名/术语。简洁、适合手机阅读。
-
-原始初稿：
-{draft}
-
-编辑审稿意见：
-{critique}
-
-规则：
-- 解决每一个具体的审稿意见
-- 洞察被标记为弱的，要么用非显而易见的观点强化，要么砍掉
-- "→ 意味着什么"被标记为显而易见的，要么变得不显而易见，要么删除该话题簇
-- 信噪比失衡的，重新分配关注度
-- 补充审稿人识别出的遗漏联系或盲点
-- 最终输出只有改进后的摘要正文（不要关于修改的元评论）
-- 保持相同的格式结构
-```
-
-## Why isolated reflection works
-
-A single-pass writer is blind to their own laziness. The Critique subagent, denied access to the source material, is forced to grade the *prose* — not whether the prose covers the source. This catches:
-- Tautological "→ 意味着什么" lines that don't actually advance the analysis
-- Signal-vs-noise imbalance (every author getting equal weight regardless of news value)
-- Format bloat (overly dense / non-mobile-friendly output)
-
-The Refine pass, with both draft and critique in context, produces output that is meaningfully better than the draft — typically tighter, more pointed, with weak insights either strengthened or culled.
-
-Do not collapse the three steps into one — the isolation is the mechanism.
+Isolation between steps is preserved (Context can't see raw tweets; Summarize can't see raw tweets and can't do web). The mechanism that made the old design work — denying each step access to upstream raw material — is kept; the failure mode (forced insight on thin data) is removed.
