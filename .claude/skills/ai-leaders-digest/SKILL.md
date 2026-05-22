@@ -217,7 +217,7 @@ Their high-level intent, for auditability:
 
 **CONTEXT** — Input: the Extract JSON only (no raw tweets). Output: same structure with each substantive item gaining a `context` (1-3 Chinese sentences of factual background) and `sources` (URL list). The subagent does NOT re-classify. Web budget 12 (heavy lookups: paper abstracts, product pages, original threads of replies, role confirmations).
 
-**SUMMARIZE** — Input: the Context JSON only (no raw tweets, no web). Output: a four-section Chinese digest with the header, **本期亮点** (2-3 high-density items), **逐人小记** (one paragraph per substantive author, faithful transcription + context — no forced strategic poses or "意味着什么"), and **🐕 沉默的狗** (enabled authors with 0 tweets in the window). Length not enforced — writes as long or short as the contexted JSON warrants.
+**SUMMARIZE** — Input: the Context JSON only (no raw tweets, no web). Output: a four-section Chinese digest with the header, **本期亮点** (2-3 high-density items, paragraph form), **逐人小记** (per-author section in **bullet-point** form — each author has a one-line headline tag plus 2-5 bullets, every bullet led by a bold keyword tag like `**Aleph**:` or `**Codex 移动端**:` so the reader can scan headings without reading prose; no forced strategic poses or "意味着什么"), and **🐕 沉默的狗** (enabled authors with 0 tweets in the window). Length not enforced — writes as long or short as the contexted JSON warrants.
 
 ## Why this pipeline replaces Draft → Critique → Refine
 
