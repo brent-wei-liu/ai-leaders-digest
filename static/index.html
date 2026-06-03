@@ -765,6 +765,44 @@ main { position: relative; z-index: 1; }
   border-color: var(--er-gold);
   background: rgba(201, 150, 46, 0.06);
 }
+
+/* Back-to-top: a small gold roundel that beckons from the lower-right
+   of the viewport once the reader has scrolled past the digest's first
+   gold-line. Fixed-position so it survives the modal's own scrolling. */
+.modal-top-btn {
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--er-gold);
+  background: radial-gradient(circle at 35% 30%, rgba(255, 216, 106, 0.95), rgba(201, 150, 46, 0.85) 55%, rgba(125, 90, 20, 0.92) 100%);
+  color: #1a1207;
+  font-family: var(--font-serif, serif);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  z-index: 110;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 220ms ease, box-shadow 220ms ease;
+  pointer-events: none;
+  box-shadow: 0 0 14px rgba(201, 150, 46, 0.45), 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+.modal-top-btn.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.modal-top-btn:hover {
+  box-shadow: 0 0 22px rgba(201, 150, 46, 0.7), 0 6px 22px rgba(0, 0, 0, 0.45);
+  transform: translateY(-2px);
+}
+.modal-top-btn:active { transform: translateY(0); }
+.modal-top-btn[hidden] { display: none !important; }
 .modal-close:hover {
   color: var(--er-gold-bright);
   transform: rotate(90deg);
@@ -1020,6 +1058,7 @@ main { position: relative; z-index: 1; }
       <span class="modal-meta" id="modal-meta"></span>
       <button type="button" class="modal-read-toggle" id="modal-read-toggle" hidden>mark read</button>
     </header>
+    <button type="button" class="modal-top-btn" id="modal-top-btn" aria-label="back to top" hidden>↑</button>
     <div class="modal-body" id="modal-body"></div>
   </div>
 </div>
@@ -1303,12 +1342,32 @@ async function markDigestReadState(id, isRead) {
   } catch (e) { /* swallow; next reload will resync */ }
 }
 
+// Back-to-top: shown when the modal-backdrop has been scrolled past
+// the digest's first heading (~300px). Bound once.
+(function wireBackToTop() {
+  const THRESHOLD = 300;
+  document.addEventListener('DOMContentLoaded', () => {
+    const backdrop = $('#modal-backdrop');
+    const btn = $('#modal-top-btn');
+    if (!backdrop || !btn) return;
+    btn.hidden = false; // present in DOM; visibility driven by .visible class
+    btn.classList.remove('visible');
+    const update = () => btn.classList.toggle('visible', backdrop.scrollTop > THRESHOLD);
+    backdrop.addEventListener('scroll', update, { passive: true });
+    btn.addEventListener('click', () => backdrop.scrollTo({ top: 0, behavior: 'smooth' }));
+  });
+})();
+
 async function openDigest(id) {
   const backdrop = $('#modal-backdrop');
   $('#modal-title').textContent = 'Loading…';
   $('#modal-meta').textContent = '';
   $('#modal-body').innerHTML = loaderHTML('unfurling the parchment…');
   backdrop.classList.add('open');
+  // New digest: reset scroll + hide the back-to-top until the user
+  // scrolls past the threshold again.
+  backdrop.scrollTop = 0;
+  $('#modal-top-btn')?.classList.remove('visible');
   let s;
   try {
     s = await fetchJSON('/api/summaries/' + id);

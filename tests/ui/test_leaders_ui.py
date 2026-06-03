@@ -418,3 +418,67 @@ def test_digest_unread_toggle(page: Page, base_url: str):
 
     # Close the drawer cleanly
     page.locator("#modal-close").click()
+
+
+# ---------------------------------------------------------------------
+# J. Back-to-top button — appears on scroll, smooth-scrolls to top
+# ---------------------------------------------------------------------
+
+def test_digest_back_to_top(page: Page, base_url: str):
+    """Open a digest, scroll the modal-backdrop past the threshold,
+    assert the back-to-top button becomes visible. Click it → scrollTop
+    returns to 0 and the button hides again."""
+    _open(page, base_url)
+    page.locator(".tab[data-tab='digests']").click()
+    try:
+        page.wait_for_selector(".digest-row", timeout=5_000)
+    except Exception:
+        pytest.skip("no digests in DB to test")
+
+    page.locator(".digest-row").first.locator("[data-action='open']").click()
+    page.wait_for_selector(".modal-backdrop.open", timeout=3_000)
+    # Wait for the rendered digest body (not the loader) so the modal
+    # actually has scrollable content
+    page.wait_for_function(
+        "() => { const b = document.getElementById('modal-body');"
+        " return b && b.innerText && b.innerText.length > 100; }",
+        timeout=5_000,
+    )
+
+    btn = page.locator("#modal-top-btn")
+    # Pre-scroll: button is in DOM but NOT visible (no .visible class).
+    # If the digest happens to be too short to scroll past 300px, skip.
+    backdrop = page.locator("#modal-backdrop")
+    max_scroll = page.evaluate(
+        "const b = document.getElementById('modal-backdrop'); b.scrollHeight - b.clientHeight"
+    )
+    if max_scroll < 400:
+        pytest.skip(f"digest too short to test back-to-top (max scroll = {max_scroll}px)")
+
+    expect(btn).not_to_have_class(re.compile(r"\bvisible\b"))
+
+    # Scroll past the 300px threshold
+    page.evaluate(
+        "const b = document.getElementById('modal-backdrop'); "
+        "b.scrollTo({top: Math.min(b.scrollHeight - b.clientHeight, 600), behavior: 'instant'});"
+    )
+    page.wait_for_function(
+        "() => document.getElementById('modal-top-btn').classList.contains('visible')",
+        timeout=2_000,
+    )
+    expect(btn).to_have_class(re.compile(r"\bvisible\b"))
+
+    # Click → smooth-scroll back to 0
+    btn.click()
+    page.wait_for_function(
+        "() => document.getElementById('modal-backdrop').scrollTop < 10",
+        timeout=2_000,
+    )
+    # And the button should hide once we're back near the top
+    page.wait_for_function(
+        "() => !document.getElementById('modal-top-btn').classList.contains('visible')",
+        timeout=2_000,
+    )
+
+    # Cleanup
+    page.locator("#modal-close").click()
