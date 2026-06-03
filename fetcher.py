@@ -277,15 +277,36 @@ def fetch_feed(handle, rss_url):
 
 def cmd_fetch(conn, args=None):
     """Fetch all enabled authors' RSS and store tweets.
-    
+
     --report-hour H : only output full report if current local hour == H.
                       Otherwise output minimal JSON with "report": false.
+
+    Entry guard: bail out before writing if integrity_check fails — writing
+    fresh rows into an already-corrupt index would make the eventual
+    dump+restore lossier and bury the original failure point in noise.
     """
     report_hour = None
     if args:
         for i, a in enumerate(args):
             if a == "--report-hour" and i + 1 < len(args):
                 report_hour = int(args[i + 1])
+
+    # Cheap pre-flight: PRAGMA integrity_check stops at the first failure on
+    # a healthy DB and takes <100ms here. If we abort on corruption, an
+    # operator gets paged within hours instead of waiting weeks for
+    # downstream queries to surface it.
+    try:
+        check = conn.execute("PRAGMA integrity_check").fetchone()
+        check_result = check[0] if check else "missing"
+    except sqlite3.DatabaseError as e:
+        check_result = f"error: {e}"
+    if check_result != "ok":
+        sys.stderr.write(
+            f"FATAL: ai_leaders.db PRAGMA integrity_check returned "
+            f"{check_result!r}; aborting fetch to avoid compounding "
+            f"corruption. Run dump+restore before next fetch.\n"
+        )
+        sys.exit(1)
 
     authors = conn.execute(
         "SELECT handle, name, rss_url FROM authors WHERE enabled = 1"
@@ -312,17 +333,33 @@ def cmd_fetch(conn, args=None):
                     stats["new_tweets"] += 1
                 except sqlite3.IntegrityError:
                     stats["dupes"] += 1
+            # Commit per author so the write lock + WAL pages are released
+            # promptly — the prior all-authors-one-transaction held the lock
+            # for 12+ seconds across the full RSS sweep, which appears to be
+            # what the recurring index corruption was tracking with. Any
+            # author whose feed parses successfully now lands its rows in
+            # SQLite immediately; a later author failing or the process
+            # being killed mid-loop leaves earlier authors' rows intact.
+            try:
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                # Treat per-author commit failure as a soft fault on this
+                # author only; subsequent authors still get a chance.
+                sys.stderr.write(
+                    f"commit failed for {a['handle']}: {e}; continuing\n"
+                )
+                stats["failed"] += 1
+                stats["ok"] -= 1
+                failed_names.append(a["name"])
         else:
             stats["failed"] += 1
             failed_names.append(a["name"])
 
         time.sleep(1)
 
-    conn.commit()
-    # Truncate the WAL after the fetch's batch commits so it doesn't grow
-    # unboundedly between checkpoints — automatic checkpoints only run when
-    # the WAL hits ~1000 pages, which on a 4x/day cron with frequent reader
-    # connections from api.py can be deferred indefinitely.
+    # Final mass cleanup — once all per-author commits are in, truncate the
+    # WAL so it doesn't accumulate from one fetch to the next. wal_checkpoint
+    # silently degrades to PASSIVE when readers are active; that's fine.
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.OperationalError:
