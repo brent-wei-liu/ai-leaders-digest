@@ -45,6 +45,14 @@ def _migrate(conn):
         "CREATE INDEX IF NOT EXISTS idx_tweets_starred "
         "ON tweets(starred) WHERE starred = 1"
     )
+    # summaries: is_read / read_at — additive ALTERs, idempotent
+    s_cols = {r[1] for r in conn.execute("PRAGMA table_info(summaries)").fetchall()}
+    for col, typedef in [
+        ("is_read", "INTEGER NOT NULL DEFAULT 0"),
+        ("read_at", "TEXT DEFAULT NULL"),
+    ]:
+        if col not in s_cols:
+            conn.execute(f"ALTER TABLE summaries ADD COLUMN {col} {typedef}")
     conn.commit()
 
 
@@ -115,7 +123,7 @@ def unstar_tweet(conn, tweet_id):
 def get_summaries(conn):
     rows = conn.execute(
         """SELECT id, date, days_back, tweet_count, sources_ok, sources_total,
-                  focus_profile, created_at
+                  focus_profile, created_at, is_read, read_at
            FROM summaries
            ORDER BY date DESC, id DESC"""
     ).fetchall()
@@ -125,11 +133,30 @@ def get_summaries(conn):
 def get_summary(conn, summary_id):
     row = conn.execute(
         """SELECT id, date, days_back, tweet_count, sources_ok, sources_total,
-                  focus_profile, content, created_at
+                  focus_profile, content, created_at, is_read, read_at
            FROM summaries WHERE id = ?""",
         (summary_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def mark_summary_read(conn, summary_id):
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        "UPDATE summaries SET is_read = 1, read_at = ? WHERE id = ?",
+        (now, summary_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def mark_summary_unread(conn, summary_id):
+    cur = conn.execute(
+        "UPDATE summaries SET is_read = 0, read_at = NULL WHERE id = ?",
+        (summary_id,),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def get_stats(conn):

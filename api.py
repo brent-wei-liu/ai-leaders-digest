@@ -16,6 +16,7 @@ from db import (
     get_conn, get_tweets, get_authors,
     star_tweet, unstar_tweet,
     get_summaries, get_summary, get_stats,
+    mark_summary_read, mark_summary_unread,
 )
 
 PORT = 8081
@@ -119,6 +120,28 @@ def api_summary(summary_id: int):
         if not s:
             raise HTTPException(404, "summary not found")
         return s
+    finally:
+        conn.close()
+
+
+@app.post("/api/summaries/{summary_id}/read")
+def api_summary_read(summary_id: int):
+    conn = get_conn()
+    try:
+        if not mark_summary_read(conn, summary_id):
+            raise HTTPException(404, "summary not found")
+        return {"ok": True, "is_read": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/summaries/{summary_id}/unread")
+def api_summary_unread(summary_id: int):
+    conn = get_conn()
+    try:
+        if not mark_summary_unread(conn, summary_id):
+            raise HTTPException(404, "summary not found")
+        return {"ok": True, "is_read": False}
     finally:
         conn.close()
 

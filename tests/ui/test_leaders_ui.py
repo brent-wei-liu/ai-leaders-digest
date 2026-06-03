@@ -322,3 +322,99 @@ def test_stats_panel_updates(page: Page, base_url: str):
         "}",
         arg=initial, timeout=5_000,
     )
+
+
+# ---------------------------------------------------------------------
+# H. Digest read/unread — opening a digest marks it read; toggle works
+# ---------------------------------------------------------------------
+
+def test_digest_mark_read_persists(page: Page, base_url: str):
+    """Opening a digest drawer should auto-mark it read (via the POST
+    /api/summaries/{id}/read endpoint). After reload, the same digest
+    row must render with .is-read class. Tested end-to-end against the
+    real API + DB."""
+    _open(page, base_url)
+    page.locator(".tab[data-tab='digests']").click()
+    try:
+        page.wait_for_selector(".digest-row", timeout=5_000)
+    except Exception:
+        pytest.skip("no digests in DB to test")
+
+    # Pick an unread digest if present; otherwise mark the first one
+    # unread via the API so the test has a known starting state.
+    first = page.locator(".digest-row").first
+    digest_id = first.get_attribute("data-id")
+    # Reset to unread via API (idempotent)
+    page.evaluate(
+        "(id) => fetch('/api/summaries/' + id + '/unread', {method:'POST'})",
+        arg=digest_id,
+    )
+    page.reload(wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    page.wait_for_selector(".digest-row", timeout=5_000)
+    row = page.locator(f".digest-row[data-id='{digest_id}']")
+    expect(row).to_have_class(re.compile(r"\bis-unread\b"), timeout=3_000)
+
+    # Open the drawer — auto-mark-read fires
+    row.locator("[data-action='open']").click()
+    page.wait_for_function(
+        "(id) => document.querySelector(`.digest-row[data-id='${id}']`)?.dataset.isRead === '1'",
+        arg=digest_id, timeout=3_000,
+    )
+    expect(row).to_have_class(re.compile(r"\bis-read\b"), timeout=2_000)
+
+    # Close the drawer
+    page.locator("#modal-close").click()
+    page.wait_for_function(
+        "() => !document.querySelector('.modal-backdrop.open')",
+        timeout=2_000,
+    )
+
+    # Reload — DB persistence check
+    page.reload(wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    page.wait_for_selector(f".digest-row[data-id='{digest_id}']", timeout=5_000)
+    row_after = page.locator(f".digest-row[data-id='{digest_id}']")
+    expect(row_after).to_have_class(re.compile(r"\bis-read\b"), timeout=3_000)
+
+
+def test_digest_unread_toggle(page: Page, base_url: str):
+    """The modal carries a 'mark unread' button that flips state back.
+    Verify both directions: open (auto-read) → click 'mark unread' →
+    row reverts to is-unread, API confirms is_read=0."""
+    _open(page, base_url)
+    page.locator(".tab[data-tab='digests']").click()
+    try:
+        page.wait_for_selector(".digest-row", timeout=5_000)
+    except Exception:
+        pytest.skip("no digests in DB to test")
+
+    first = page.locator(".digest-row").first
+    digest_id = first.get_attribute("data-id")
+    # Force unread starting state
+    page.evaluate(
+        "(id) => fetch('/api/summaries/' + id + '/unread', {method:'POST'})",
+        arg=digest_id,
+    )
+    page.reload(wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    page.wait_for_selector(f".digest-row[data-id='{digest_id}']", timeout=5_000)
+
+    # Open → auto-read
+    page.locator(f".digest-row[data-id='{digest_id}'] [data-action='open']").click()
+    btn = page.locator("#modal-read-toggle")
+    expect(btn).to_be_visible(timeout=3_000)
+    expect(btn).to_have_text(re.compile(r"mark unread", re.I), timeout=3_000)
+
+    # Click the toggle → mark unread
+    btn.click()
+    expect(btn).to_have_text(re.compile(r"mark read", re.I), timeout=3_000)
+    # And API now reports is_read=0
+    final_state = page.evaluate(
+        "async (id) => (await (await fetch('/api/summaries/' + id)).json()).is_read",
+        arg=digest_id,
+    )
+    assert final_state == 0, f"after toggle the API should report is_read=0, got {final_state}"
+
+    # Close the drawer cleanly
+    page.locator("#modal-close").click()

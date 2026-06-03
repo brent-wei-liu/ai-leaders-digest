@@ -627,6 +627,39 @@ main { position: relative; z-index: 1; }
   font-weight: 600;
 }
 
+/* Read / unread visual: unread rows carry a small flame-coloured glyph
+   before the date and a 'NEW' label in the meta line; read rows fade
+   their date down to text-dim. Elden Ring vibe — beckoning to the
+   unread, dimmed once consulted. */
+.digest-unread-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 12px;
+  vertical-align: middle;
+  background: radial-gradient(circle at 35% 30%, #ffd86a, var(--er-gold) 55%, transparent 75%);
+  box-shadow: 0 0 8px rgba(201, 150, 46, 0.7), 0 0 16px rgba(201, 150, 46, 0.35);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.digest-row.is-unread .digest-unread-dot { opacity: 1; }
+.digest-row.is-read .digest-date { color: var(--er-text-dim); font-weight: 600; }
+.digest-row.is-read { opacity: 0.78; }
+.digest-row.is-read:hover { opacity: 1; }
+.digest-unread-label {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border: 1px solid var(--er-gold);
+  color: var(--er-gold);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(201, 150, 46, 0.06);
+}
+
 /* ============================================================
    Modal
    ============================================================ */
@@ -712,6 +745,25 @@ main { position: relative; z-index: 1; }
   padding: 6px 12px;
   min-width: 44px; min-height: 44px;
   transition: color 200ms ease, transform 200ms ease;
+}
+.modal-read-toggle {
+  margin-top: 6px;
+  background: transparent;
+  border: 1px solid var(--er-gold-muted);
+  color: var(--er-gold-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 160ms, border-color 160ms, background 160ms;
+  align-self: flex-start;
+}
+.modal-read-toggle:hover {
+  color: var(--er-gold);
+  border-color: var(--er-gold);
+  background: rgba(201, 150, 46, 0.06);
 }
 .modal-close:hover {
   color: var(--er-gold-bright);
@@ -966,6 +1018,7 @@ main { position: relative; z-index: 1; }
         <h2 class="modal-title" id="modal-title">…</h2>
       </div>
       <span class="modal-meta" id="modal-meta"></span>
+      <button type="button" class="modal-read-toggle" id="modal-read-toggle" hidden>mark read</button>
     </header>
     <div class="modal-body" id="modal-body"></div>
   </div>
@@ -1209,16 +1262,45 @@ async function loadDigests() {
     return;
   }
   list.innerHTML = data.summaries.map(s => `
-    <div class="digest-row" data-id="${s.id}">
-      <div class="digest-date">${escapeHtml(s.date)}</div>
+    <div class="digest-row ${s.is_read ? 'is-read' : 'is-unread'}" data-id="${s.id}" data-is-read="${s.is_read ? '1' : '0'}">
+      <div class="digest-date">
+        <span class="digest-unread-dot" aria-hidden="true"></span>${escapeHtml(s.date)}
+      </div>
       <div class="digest-meta">
         <span class="digest-meta-num">${s.tweet_count ?? 0}</span> tweets ·
         <span class="digest-meta-num">${s.sources_ok ?? 0}/${s.sources_total ?? 0}</span> sources ·
         <em>${escapeHtml(s.focus_profile || 'default')}</em>
+        ${s.is_read ? '' : '<span class="digest-unread-label">NEW</span>'}
       </div>
       <button class="btn" data-action="open">Open</button>
     </div>
   `).join('');
+}
+
+async function markDigestReadState(id, isRead) {
+  // Optimistic UI: flip the row's class first, then POST. If the POST
+  // fails we leave the optimistic state — a refresh will resync from DB.
+  const row = document.querySelector(`.digest-row[data-id="${id}"]`);
+  if (row) {
+    row.classList.toggle('is-read', isRead);
+    row.classList.toggle('is-unread', !isRead);
+    row.dataset.isRead = isRead ? '1' : '0';
+    const label = row.querySelector('.digest-unread-label');
+    if (isRead && label) label.remove();
+    else if (!isRead && !label) {
+      const meta = row.querySelector('.digest-meta');
+      if (meta) meta.insertAdjacentHTML('beforeend', ' <span class="digest-unread-label">NEW</span>');
+    }
+  }
+  // Drawer toggle button label
+  const btn = $('#modal-read-toggle');
+  if (btn && btn.dataset.id === String(id)) {
+    btn.textContent = isRead ? 'mark unread' : 'mark read';
+    btn.dataset.isRead = isRead ? '1' : '0';
+  }
+  try {
+    await fetch(`/api/summaries/${id}/${isRead ? 'read' : 'unread'}`, { method: 'POST' });
+  } catch (e) { /* swallow; next reload will resync */ }
 }
 
 async function openDigest(id) {
@@ -1237,10 +1319,21 @@ async function openDigest(id) {
   $('#modal-title').textContent = s.date;
   $('#modal-meta').textContent =
     `${s.tweet_count ?? 0} tweets · ${s.sources_ok ?? 0}/${s.sources_total ?? 0} sources · ${s.focus_profile || 'default'}`;
+  // Sync the modal's read-toggle button with the loaded digest.
+  const btn = $('#modal-read-toggle');
+  if (btn) {
+    btn.dataset.id = String(id);
+    btn.dataset.isRead = s.is_read ? '1' : '0';
+    btn.textContent = s.is_read ? 'mark unread' : 'mark read';
+    btn.hidden = false;
+  }
   $('#modal-body').innerHTML = window.marked
     ? marked.parse(s.content || '')
     : `<pre style="white-space:pre-wrap">${escapeHtml(s.content || '')}</pre>`;
   $('#modal-body').scrollTop = 0;
+  // Auto-mark read when the drawer opens (the act of opening counts as
+  // reading). The user can flip it back via the toggle.
+  if (!s.is_read) markDigestReadState(id, true);
 }
 
 // ============================================================
@@ -1284,6 +1377,14 @@ document.addEventListener('click', (ev) => {
   const digestRow = ev.target.closest('.digest-row');
   if (digestRow && ev.target.closest('[data-action="open"]')) {
     openDigest(digestRow.dataset.id);
+    return;
+  }
+
+  const readToggle = ev.target.closest('#modal-read-toggle');
+  if (readToggle) {
+    const id = parseInt(readToggle.dataset.id, 10);
+    const currentlyRead = readToggle.dataset.isRead === '1';
+    if (id) markDigestReadState(id, !currentlyRead);
     return;
   }
 
