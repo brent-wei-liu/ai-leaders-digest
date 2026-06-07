@@ -53,6 +53,7 @@ DEFAULT_AUTHORS = [
     ("gdb", "Greg Brockman", "ai-industry", "https://nitter.net/gdb/rss"),
     ("demishassabis", "Demis Hassabis", "ai-pioneer", "https://nitter.net/demishassabis/rss"),
     ("soumithchintala", "Soumith Chintala", "ai-engineering", "https://nitter.net/soumithchintala/rss"),
+    ("aleabitoreddit", "Serenity", "investor", "https://nitter.net/aleabitoreddit/rss"),
 ]
 
 DEFAULT_PROFILES = [
