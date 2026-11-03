@@ -13,10 +13,10 @@
 - name: ai-leaders-fetch
   skill: null
   script: cd {{REPO}} && python3 fetcher.py fetch
-  frequency: every 4h (08:00, 12:00, 16:00, 20:00 PT)
-  description: Pull AI leaders' tweets from Nitter RSS into ai_leaders.db (deduped, partial-source-tolerant).
+  frequency: daily 09:40 PT
+  description: Pull the RSS/API sources in sources.json into ai_leaders.db (deduped, fails soft per source).
 
 - name: ai-leaders-digest
   skill: .claude/skills/ai-leaders-digest
-  frequency: daily 10:00 PT
-  description: Generate daily Chinese digest via Draft/Critique/Refine isolated reflection (3 subagents), save to summaries table, send via email_sender.py.
+  frequency: daily 11:40 PT
+  description: Web-search the authors' last 2 days, then generate the Chinese digest via Extract/Context/Summarize (3 isolated subagents), save to summaries table, send via email_sender.py (Gmail SMTP; falls back to a Gmail draft via MCP).

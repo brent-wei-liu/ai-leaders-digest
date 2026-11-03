@@ -23,7 +23,7 @@ def get_conn():
     conn.execute("PRAGMA journal_mode=WAL")
     # Without busy_timeout the default is 0 — any concurrent writer hitting a
     # lock fails immediately with SQLITE_BUSY. ai-leaders-digest runs an
-    # always-on api.py alongside a 4x/day fetcher, and the resulting
+    # always-on api.py alongside a scheduled fetcher, and the resulting
     # contention churn is the most plausible culprit behind the recurring
     # page-level index corruption (see git history for repeated dump+restore
     # cycles). 5 seconds is well under any HTTP request timeout but long
@@ -38,6 +38,8 @@ def _migrate(conn):
     for col, typedef in [
         ("starred", "INTEGER DEFAULT 0"),
         ("starred_at", "TEXT DEFAULT NULL"),
+        ("platform", "TEXT DEFAULT 'x'"),
+        ("source_name", "TEXT DEFAULT NULL"),
     ]:
         if col not in cols:
             conn.execute(f"ALTER TABLE tweets ADD COLUMN {col} {typedef}")
@@ -79,7 +81,7 @@ def get_tweets(conn, *, author=None, query=None, starred_only=False,
     rows = conn.execute(
         f"""SELECT t.id, t.author, a.name AS author_name, a.category,
                    t.tweet_id, t.date, t.text, t.url, t.is_retweet,
-                   t.starred, t.starred_at
+                   t.starred, t.starred_at, t.platform, t.source_name
             FROM tweets t
             JOIN authors a ON t.author = a.handle
             {where_sql}

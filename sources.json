@@ -1,0 +1,145 @@
+[
+  {
+    "handle": "geoffreyhinton",
+    "name": "Geoffrey Hinton",
+    "category": "ai-pioneer",
+    "search_hint": "Geoffrey Hinton AI interview OR talk OR warning",
+    "sources": []
+  },
+  {
+    "handle": "karpathy",
+    "name": "Andrej Karpathy",
+    "category": "ai-engineering",
+    "search_hint": "Andrej Karpathy",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://karpathy.bearblog.dev/feed/",
+        "platform": "blog",
+        "label": "karpathy.bearblog.dev"
+      },
+      {
+        "type": "bluesky",
+        "actor": "karpathy-mirr.selfhosted.social",
+        "platform": "x-mirror",
+        "label": "Unofficial X mirror (Bluesky)"
+      }
+    ]
+  },
+  {
+    "handle": "Yoshua_Bengio",
+    "name": "Yoshua Bengio",
+    "category": "ai-pioneer",
+    "search_hint": "Yoshua Bengio LawZero AI safety",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://bsky.app/profile/yoshuabengio.bsky.social/rss",
+        "platform": "bluesky",
+        "label": "Bluesky @yoshuabengio.bsky.social"
+      }
+    ]
+  },
+  {
+    "handle": "elonmusk",
+    "name": "Elon Musk",
+    "category": "tech-leader",
+    "search_hint": "Elon Musk xAI Grok said AI",
+    "sources": []
+  },
+  {
+    "handle": "sama",
+    "name": "Sam Altman",
+    "category": "ai-industry",
+    "search_hint": "Sam Altman OpenAI said",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://blog.samaltman.com/posts.atom",
+        "platform": "blog",
+        "label": "blog.samaltman.com"
+      },
+      {
+        "type": "bluesky",
+        "actor": "sama-mirr.selfhosted.social",
+        "platform": "x-mirror",
+        "label": "Unofficial X mirror (Bluesky)"
+      }
+    ]
+  },
+  {
+    "handle": "AndrewYNg",
+    "name": "Andrew Ng",
+    "category": "ai-pioneer",
+    "search_hint": "Andrew Ng AI",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://charonhub.deeplearning.ai/rss/",
+        "platform": "newsletter",
+        "label": "The Batch (DeepLearning.AI)",
+        "include_url": "/issue-\\d+/",
+        "link_rewrite": {
+          "from": "https://charonhub.deeplearning.ai/",
+          "to": "https://www.deeplearning.ai/the-batch/"
+        }
+      }
+    ]
+  },
+  {
+    "handle": "jensenhuang",
+    "name": "Jensen Huang",
+    "category": "tech-leader",
+    "search_hint": "Jensen Huang Nvidia said",
+    "sources": []
+  },
+  {
+    "handle": "paulg",
+    "name": "Paul Graham",
+    "category": "startup",
+    "search_hint": "Paul Graham essay OR said Y Combinator",
+    "sources": []
+  },
+  {
+    "handle": "ylecun",
+    "name": "Yann LeCun",
+    "category": "ai-pioneer",
+    "search_hint": "Yann LeCun world models AMI said",
+    "sources": []
+  },
+  {
+    "handle": "gdb",
+    "name": "Greg Brockman",
+    "category": "ai-industry",
+    "search_hint": "Greg Brockman OpenAI",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://blog.gregbrockman.com/feed",
+        "platform": "blog",
+        "label": "blog.gregbrockman.com"
+      }
+    ]
+  },
+  {
+    "handle": "demishassabis",
+    "name": "Demis Hassabis",
+    "category": "ai-pioneer",
+    "search_hint": "Demis Hassabis DeepMind said",
+    "sources": []
+  },
+  {
+    "handle": "soumithchintala",
+    "name": "Soumith Chintala",
+    "category": "ai-engineering",
+    "search_hint": "Soumith Chintala PyTorch",
+    "sources": []
+  },
+  {
+    "handle": "aleabitoreddit",
+    "name": "Serenity",
+    "category": "investor",
+    "search_hint": "Serenity @aleabitoreddit AI investor",
+    "sources": []
+  }
+]

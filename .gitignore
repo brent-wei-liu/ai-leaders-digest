@@ -9,3 +9,4 @@ data/*.db-wal
 data/latest_tweets_*.json
 data/.fuse_hidden*
 data/final_digest_*.txt
+data/email_sent.jsonl

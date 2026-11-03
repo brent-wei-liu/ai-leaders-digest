@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 """
-AI Leaders RSS Digest with SQLite persistence.
+AI Leaders source fetcher with SQLite persistence.
+
+Authors and their per-author sources live in sources.json. Everything here is
+stdlib only and spends no LLM tokens; web search findings arrive via save-items.
 
 Usage:
-  python3 rss_digest.py fetch              # Fetch RSS → store in DB
-  python3 rss_digest.py query [days] [--author X] [--category Y] [--profile Z]
-                                           # Query tweets from DB, output JSON
-  python3 rss_digest.py save-summary       # Save summary text from stdin
-  python3 rss_digest.py authors            # List all authors
-  python3 rss_digest.py profiles           # List all focus profiles
-  python3 rss_digest.py add-profile <name> <json>  # Add a focus profile
-  python3 rss_digest.py subscribers         # List subscribers
-  python3 rss_digest.py add-subscriber <phone> [name] [profile]
-  python3 rss_digest.py remove-subscriber <phone>
-  python3 rss_digest.py toggle-subscriber <phone>  # Enable/disable
-  python3 rss_digest.py stats [days]       # Quick stats
+  python3 fetcher.py fetch                 # Fetch all configured sources → store in DB
+  python3 fetcher.py save-items [--days 2] # Store web-search findings (JSON array on stdin)
+  python3 fetcher.py query [days] [--author X] [--category Y] [--profile Z]
+                                           # Query items from DB, output JSON
+  python3 fetcher.py save-summary          # Save summary text from stdin
+  python3 fetcher.py authors               # List all authors
+  python3 fetcher.py profiles              # List all focus profiles
+  python3 fetcher.py add-profile <name> <json>  # Add a focus profile
+  python3 fetcher.py subscribers           # List subscribers
+  python3 fetcher.py add-subscriber <phone> [name] [profile]
+  python3 fetcher.py remove-subscriber <phone>
+  python3 fetcher.py toggle-subscriber <phone>  # Enable/disable
+  python3 fetcher.py stats [days]          # Quick stats
 """
 
+import difflib
+import hashlib
+import html
 import json
 import os
 import re
@@ -25,8 +32,8 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import urllib.parse
 import urllib.request
-import urllib.error
 import xml.etree.ElementTree as ET
 
 DB_PATH = os.environ.get(
@@ -34,27 +41,19 @@ DB_PATH = os.environ.get(
     str(Path(__file__).resolve().parent / "data" / "ai_leaders.db"),
 )
 
-FALLBACK_NITTER_INSTANCES = [
-    "https://nitter.net",
-    "https://nitter.privacydev.net",
-    "https://nitter.poast.org",
-]
+SOURCES_PATH = os.environ.get(
+    "AI_LEADERS_SOURCES",
+    str(Path(__file__).resolve().parent / "sources.json"),
+)
 
-DEFAULT_AUTHORS = [
-    ("geoffreyhinton", "Geoffrey Hinton", "ai-pioneer", "https://nitter.net/geoffreyhinton/rss"),
-    ("karpathy", "Andrej Karpathy", "ai-engineering", "https://nitter.net/karpathy/rss"),
-    ("Yoshua_Bengio", "Yoshua Bengio", "ai-pioneer", "https://nitter.net/Yoshua_Bengio/rss"),
-    ("elonmusk", "Elon Musk", "tech-leader", "https://nitter.net/elonmusk/rss"),
-    ("sama", "Sam Altman", "ai-industry", "https://nitter.net/sama/rss"),
-    ("AndrewYNg", "Andrew Ng", "ai-pioneer", "https://nitter.net/AndrewYNg/rss"),
-    ("jensenhuang", "Jensen Huang", "tech-leader", "https://nitter.net/jensenhuang/rss"),
-    ("paulg", "Paul Graham", "startup", "https://nitter.net/paulg/rss"),
-    ("ylecun", "Yann LeCun", "ai-pioneer", "https://nitter.net/ylecun/rss"),
-    ("gdb", "Greg Brockman", "ai-industry", "https://nitter.net/gdb/rss"),
-    ("demishassabis", "Demis Hassabis", "ai-pioneer", "https://nitter.net/demishassabis/rss"),
-    ("soumithchintala", "Soumith Chintala", "ai-engineering", "https://nitter.net/soumithchintala/rss"),
-    ("aleabitoreddit", "Serenity", "investor", "https://nitter.net/aleabitoreddit/rss"),
-]
+BLUESKY_FEED_API = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
+BLUESKY_LIMIT = 50
+HTTP_TIMEOUT = 20
+USER_AGENT = "Mozilla/5.0 (compatible; RSS-Reader/1.0)"
+MAX_TEXT_CHARS = 2000
+DEDUPE_LOOKBACK_DAYS = 30
+SIMILAR_TEXT_RATIO = 0.9
+MIN_CONTAINED_TEXT_CHARS = 40
 
 DEFAULT_PROFILES = [
     ("default", "均衡关注所有人", json.dumps({
@@ -99,7 +98,13 @@ def get_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # TRUNCATE (not DELETE): the data/ dir is a virtiofs mount that denies
+    # file unlink ("Operation not permitted"). DELETE mode must remove the
+    # rollback journal on every commit, which fails and surfaces as
+    # "disk I/O error" — and a leftover hot journal then blocks all opens.
+    # TRUNCATE is still crash-safe but truncates the journal in place instead
+    # of unlinking it, which this mount allows.
+    conn.execute("PRAGMA journal_mode=TRUNCATE")
     # 5s wait when a concurrent writer (api.py) holds the lock — without this
     # the default 0 makes every overlap a hard SQLITE_BUSY failure.
     conn.execute("PRAGMA busy_timeout=5000")
@@ -165,12 +170,17 @@ def init_db(conn):
         CREATE INDEX IF NOT EXISTS idx_summaries_date ON summaries(date);
     """)
 
-    # Seed authors if empty
-    if conn.execute("SELECT COUNT(*) FROM authors").fetchone()[0] == 0:
-        conn.executemany(
-            "INSERT INTO authors (handle, name, category, rss_url) VALUES (?, ?, ?, ?)",
-            DEFAULT_AUTHORS,
-        )
+    ensure_source_columns(conn)
+
+    # Seed authors. OR IGNORE (not "only if empty") so an author added to
+    # sources.json later also lands in an existing DB; rows already there
+    # (including their enabled flag) are left untouched.
+    conn.executemany(
+        "INSERT OR IGNORE INTO authors (handle, name, category) VALUES (?, ?, ?)",
+        [(a["handle"], a["name"], a["category"]) for a in load_author_config()],
+    )
+    # rss_url is unused now that sources.json owns sources; clear the dead values.
+    conn.execute("UPDATE authors SET rss_url = NULL WHERE rss_url IS NOT NULL")
 
     # Seed profiles if empty
     if conn.execute("SELECT COUNT(*) FROM focus_profiles").fetchone()[0] == 0:
@@ -185,99 +195,185 @@ def init_db(conn):
     conn.commit()
 
 
-# ── RSS Fetching ──────────────────────────────────────────────────────
+def ensure_source_columns(conn):
+    """Additive migration: where each row came from. Legacy rows are X tweets."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(tweets)").fetchall()}
+    for col, typedef in [
+        ("platform", "TEXT DEFAULT 'x'"),
+        ("source_name", "TEXT DEFAULT NULL"),
+    ]:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE tweets ADD COLUMN {col} {typedef}")
+    # Not UNIQUE: restored copies of the live DB lost the tweet_id constraint and
+    # already hold duplicate legacy rows, so inserts check for existence instead.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tweets_tweet_id ON tweets(tweet_id)")
 
-def parse_rss_date(date_str):
+
+def load_author_config():
+    with open(SOURCES_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── Source Fetching ───────────────────────────────────────────────────
+
+def parse_date(date_str):
+    """Parse a feed or user-supplied date; returns an aware UTC datetime or None."""
     if not date_str:
         return None
-    formats = [
+    date_str = date_str.strip()
+    parsed = None
+    for fmt in (
         "%a, %d %b %Y %H:%M:%S %z",
         "%a, %d %b %Y %H:%M:%S GMT",
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%SZ",
-    ]
-    for fmt in formats:
+        "%d %b %Y %H:%M %z",  # Bluesky profile RSS
+    ):
         try:
-            dt = datetime.strptime(date_str.strip(), fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            parsed = datetime.strptime(date_str, fmt)
+            break
         except ValueError:
             continue
-    return None
-
-
-def fetch_feed(handle, rss_url):
-    """Fetch RSS feed, trying fallback instances."""
-    username = handle
-    errors = []
-
-    for base in FALLBACK_NITTER_INSTANCES:
-        url = f"{base}/{username}/rss"
+    if parsed is None:
         try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; RSS-Reader/1.0)"},
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                content = resp.read()
+            parsed = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
-            root = ET.fromstring(content)
-            channel = root.find("channel")
-            if channel is None:
-                errors.append(f"{base}: no channel element")
-                continue
 
-            items = []
-            for item in channel.findall("item"):
-                title = item.findtext("title", "").strip()
-                link = item.findtext("link", "").strip()
-                pub_date_str = item.findtext("pubDate", "")
-                description = item.findtext("description", "").strip()
+def clean_html(raw):
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", raw or "")
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</li>|</h[1-6]>", "\n", text)
+    text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    text = re.sub(r"[ \t\xa0]+", " ", text)
+    return re.sub(r"\s*\n\s*", "\n", text).strip()
 
-                pub_date = parse_rss_date(pub_date_str)
 
-                # Clean HTML
-                description = re.sub(r"<[^>]+>", "", description).strip()
-                if len(description) > 500:
-                    description = description[:500]
+def compose_text(title, body):
+    """Title + body, capped. Titles without letters or digits (e.g. "-") are noise."""
+    title = clean_html(title)
+    if not re.search(r"\w", title) or body.startswith(title):
+        title = ""
+    text = f"{title}\n{body}".strip() if title else body
+    return text[:MAX_TEXT_CHARS]
 
-                # Detect retweet
-                is_rt = 1 if title.startswith("RT by") or title.startswith("R to") else 0
 
-                # Extract tweet ID from link
-                tweet_id = None
-                if link:
-                    m = re.search(r"/status/(\d+)", link)
-                    if m:
-                        tweet_id = m.group(1)
+def http_get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        return resp.read()
 
-                items.append({
-                    "tweet_id": tweet_id,
-                    "date": pub_date.isoformat() if pub_date else None,
-                    "text": description or title,
-                    "url": link,
-                    "is_retweet": is_rt,
-                })
 
-            return {"status": "ok", "items": items, "source_url": url}
+def parse_feed(content):
+    """Parse RSS 2.0 or Atom bytes into raw items (id, url, date, text)."""
+    atom = "{http://www.w3.org/2005/Atom}"
+    root = ET.fromstring(content)
+    items = []
+    if root.tag == f"{atom}feed":
+        for entry in root.findall(f"{atom}entry"):
+            links = entry.findall(f"{atom}link")
+            alternate = [l for l in links if l.get("rel", "alternate") == "alternate"]
+            link = alternate[0].get("href", "") if alternate else ""
+            body = entry.findtext(f"{atom}content") or entry.findtext(f"{atom}summary") or ""
+            # published, not updated: Atom feeds may bump updated on every render.
+            date = entry.findtext(f"{atom}published") or entry.findtext(f"{atom}updated")
+            items.append({
+                "id": entry.findtext(f"{atom}id") or link,
+                "url": link.strip(),
+                "date": parse_date(date),
+                "text": compose_text(entry.findtext(f"{atom}title", ""), clean_html(body)),
+            })
+        return items
 
-        except urllib.error.HTTPError as e:
-            errors.append(f"{base}: HTTP {e.code}")
-        except urllib.error.URLError as e:
-            errors.append(f"{base}: {e.reason}")
-        except ET.ParseError as e:
-            errors.append(f"{base}: XML parse error - {e}")
-        except Exception as e:
-            errors.append(f"{base}: {e}")
+    channel = root.find("channel")
+    if channel is None:
+        raise ValueError("neither an RSS channel nor an Atom feed")
+    for item in channel.findall("item"):
+        link = item.findtext("link", "").strip()
+        body = (item.findtext("{http://purl.org/rss/1.0/modules/content/}encoded")
+                or item.findtext("description") or "")
+        date = item.findtext("pubDate") or item.findtext("{http://purl.org/dc/elements/1.1/}date")
+        items.append({
+            "id": item.findtext("guid") or link,
+            "url": link,
+            "date": parse_date(date),
+            "text": compose_text(item.findtext("title", ""), clean_html(body)),
+        })
+    return items
 
-        time.sleep(0.5)
 
-    return {"status": "failed", "items": [], "errors": errors}
+def fetch_feed_source(source):
+    items = parse_feed(http_get(source["url"]))
+    include = source.get("include_url")
+    if include:
+        items = [i for i in items if re.search(include, i["url"])]
+    rewrite = source.get("link_rewrite")
+    for item in items:
+        if rewrite and item["url"].startswith(rewrite["from"]):
+            item["url"] = rewrite["to"] + item["url"][len(rewrite["from"]):]
+        item["id"] = f"feed:{item['id']}"
+        item["is_retweet"] = 1 if item["text"].startswith("RT @") else 0
+    return items
+
+
+def fetch_bluesky_source(source):
+    query = urllib.parse.urlencode({"actor": source["actor"], "limit": BLUESKY_LIMIT})
+    data = json.loads(http_get(f"{BLUESKY_FEED_API}?{query}"))
+    items = []
+    for entry in data.get("feed", []):
+        post = entry["post"]
+        record = post.get("record", {})
+        text = record.get("text", "").strip()
+        external = (post.get("embed") or {}).get("external", {}).get("uri")
+        if external and external not in text:
+            text = f"{text}\n{external}".strip()
+        items.append({
+            "id": f"bsky:{post['uri']}",
+            "url": f"https://bsky.app/profile/{post['author']['handle']}/post/{post['uri'].rsplit('/', 1)[-1]}",
+            "date": parse_date(record.get("createdAt")),
+            "text": text[:MAX_TEXT_CHARS],
+            "is_retweet": 1 if "reason" in entry or text.startswith("RT @") else 0,
+        })
+    return items
+
+
+SOURCE_FETCHERS = {
+    "feed": fetch_feed_source,
+    "bluesky": fetch_bluesky_source,
+}
+
+
+def fetch_source(source):
+    """Fetch one configured source. Raises on any failure; the caller fails soft."""
+    fetcher = SOURCE_FETCHERS.get(source.get("type"))
+    if fetcher is None:
+        raise ValueError(f"unknown source type {source.get('type')!r}")
+    return fetcher(source)
+
+
+def store_items(conn, handle, source, items, now):
+    """Insert fetched items; undated, unlinked and empty ones are skipped. Returns (new, dupes)."""
+    new = dupes = 0
+    for item in items:
+        if not item["date"] or not item["url"] or not item["text"]:
+            continue
+        if conn.execute("SELECT 1 FROM tweets WHERE tweet_id = ?", (item["id"],)).fetchone():
+            dupes += 1
+            continue
+        conn.execute(
+            """INSERT INTO tweets
+               (author, tweet_id, date, text, url, is_retweet, fetched_at, platform, source_name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (handle, item["id"], item["date"].isoformat(), item["text"], item["url"],
+             item["is_retweet"], now, source.get("platform", "feed"), source.get("label")),
+        )
+        new += 1
+    return new, dupes
 
 
 def cmd_fetch(conn, args=None):
-    """Fetch all enabled authors' RSS and store tweets.
+    """Fetch every configured source of every enabled author and store the items.
 
     --report-hour H : only output full report if current local hour == H.
                       Otherwise output minimal JSON with "report": false.
@@ -309,68 +405,43 @@ def cmd_fetch(conn, args=None):
         )
         sys.exit(1)
 
-    authors = conn.execute(
-        "SELECT handle, name, rss_url FROM authors WHERE enabled = 1"
-    ).fetchall()
-
+    enabled = {r["handle"] for r in conn.execute("SELECT handle FROM authors WHERE enabled = 1")}
     now = datetime.now(timezone.utc).isoformat()
-    stats = {"total": len(authors), "ok": 0, "failed": 0, "new_tweets": 0, "dupes": 0}
-    failed_names = []
+    stats = {"total": 0, "ok": 0, "failed": 0, "new_items": 0, "dupes": 0,
+             "failed_names": [], "sources": []}
 
-    for a in authors:
-        result = fetch_feed(a["handle"], a["rss_url"])
-        if result["status"] == "ok":
-            stats["ok"] += 1
-            for item in result["items"]:
-                if not item["tweet_id"] or not item["date"]:
-                    continue
-                try:
-                    conn.execute(
-                        """INSERT INTO tweets (author, tweet_id, date, text, url, is_retweet, fetched_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (a["handle"], item["tweet_id"], item["date"],
-                         item["text"], item["url"], item["is_retweet"], now),
-                    )
-                    stats["new_tweets"] += 1
-                except sqlite3.IntegrityError:
-                    stats["dupes"] += 1
-            # Commit per author so the write lock + WAL pages are released
-            # promptly — the prior all-authors-one-transaction held the lock
-            # for 12+ seconds across the full RSS sweep, which appears to be
-            # what the recurring index corruption was tracking with. Any
-            # author whose feed parses successfully now lands its rows in
-            # SQLite immediately; a later author failing or the process
-            # being killed mid-loop leaves earlier authors' rows intact.
+    for author in load_author_config():
+        if author["handle"] not in enabled:
+            continue
+        for source in author.get("sources", []):
+            stats["total"] += 1
+            label = source.get("label") or source.get("url") or source.get("actor")
+            report = {"author": author["handle"], "source": label}
             try:
+                items = fetch_source(source)
+                new, dupes = store_items(conn, author["handle"], source, items, now)
+                # Commit per source so the write lock is released promptly; a
+                # later failure or kill leaves earlier sources' rows intact.
                 conn.commit()
-            except sqlite3.OperationalError as e:
-                # Treat per-author commit failure as a soft fault on this
-                # author only; subsequent authors still get a chance.
-                sys.stderr.write(
-                    f"commit failed for {a['handle']}: {e}; continuing\n"
-                )
+            except Exception as e:  # fail soft: one bad source must not stop the rest
+                conn.rollback()
                 stats["failed"] += 1
-                stats["ok"] -= 1
-                failed_names.append(a["name"])
-        else:
-            stats["failed"] += 1
-            failed_names.append(a["name"])
-
-        time.sleep(1)
-
-    # Final mass cleanup — once all per-author commits are in, truncate the
-    # WAL so it doesn't accumulate from one fetch to the next. wal_checkpoint
-    # silently degrades to PASSIVE when readers are active; that's fine.
-    try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except sqlite3.OperationalError:
-        pass
-    stats["failed_names"] = failed_names
+                stats["failed_names"].append(f"{author['name']}: {label}")
+                report.update(status="failed", error=f"{type(e).__name__}: {e}")
+            else:
+                stats["ok"] += 1
+                stats["new_items"] += new
+                stats["dupes"] += dupes
+                dates = [i["date"] for i in items if i["date"]]
+                report.update(status="ok", new=new, dupes=dupes,
+                              newest=max(dates).isoformat() if dates else None)
+            stats["sources"].append(report)
+            time.sleep(0.5)
 
     # Determine if we should output a full report
     import zoneinfo
     local_hour = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).hour
-    
+
     if report_hour is not None:
         stats["report"] = (local_hour == report_hour)
     else:
@@ -378,11 +449,134 @@ def cmd_fetch(conn, args=None):
 
     print(json.dumps(stats, ensure_ascii=False, indent=2))
 
+    # Partial failure is tolerated; every source failing is not — exit non-zero
+    # so the scheduled run surfaces it instead of reporting a quiet "0 new items".
+    if stats["total"] and stats["ok"] == 0:
+        sys.stderr.write(f"FATAL: all {stats['total']} sources failed.\n")
+        sys.exit(1)
+
+
+# ── Web Findings ──────────────────────────────────────────────────────
+
+TRACKING_PARAMS = re.compile(r"^(utm_.*|fbclid|gclid|ref|ref_src|s|t)$", re.I)
+
+
+def canonical_url(url):
+    """Normalise a URL for comparison: scheme, host case, www, fragment, tracking."""
+    parts = urllib.parse.urlsplit(url.strip())
+    host = parts.netloc.lower().removeprefix("www.")
+    query = urllib.parse.urlencode(
+        [(k, v) for k, v in urllib.parse.parse_qsl(parts.query) if not TRACKING_PARAMS.match(k)]
+    )
+    return f"{host}{parts.path.rstrip('/')}" + (f"?{query}" if query else "")
+
+
+def normalize_text(text):
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def is_duplicate(url, text, existing):
+    """True if url or text matches an existing (url, text) row of this author."""
+    canon = canonical_url(url)
+    norm = normalize_text(text)
+    for other_url, other_text in existing:
+        if other_url and canonical_url(other_url) == canon:
+            return True
+        other = normalize_text(other_text or "")
+        if not other:
+            continue
+        shorter, longer = sorted((norm, other), key=len)
+        if len(shorter) >= MIN_CONTAINED_TEXT_CHARS and shorter in longer:
+            return True
+        if norm == other or difflib.SequenceMatcher(None, norm, other).ratio() >= SIMILAR_TEXT_RATIO:
+            return True
+    return False
+
+
+def validate_web_item(raw, handles, cutoff, now):
+    """Return (clean_item, None) or (None, rejection_reason)."""
+    if not isinstance(raw, dict):
+        return None, "not an object"
+    handle = handles.get(str(raw.get("author", "")).lstrip("@").lower())
+    if not handle:
+        return None, "unknown author"
+    url = str(raw.get("url") or "").strip()
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None, "missing or invalid source url"
+    text = str(raw.get("text") or "").strip()
+    if not text:
+        return None, "empty text"
+    date = parse_date(str(raw.get("date") or ""))
+    if not date:
+        return None, "missing or unparseable date"
+    if date < cutoff:
+        return None, "older than window"
+    if date > now + timedelta(days=1):
+        return None, "date in the future"
+    source_name = str(raw.get("source_name") or "").strip() or parts.netloc.lower().removeprefix("www.")
+    return {"author": handle, "url": url, "text": text[:MAX_TEXT_CHARS],
+            "date": date, "source_name": source_name}, None
+
+
+def cmd_save_items(conn, args):
+    """Store web-search findings from a JSON array on stdin.
+
+    Each item: {"author": handle, "date": ISO date, "url": source URL,
+    "text": what they said or did, "source_name": publication}. Items without
+    a URL or date, older than --days, or duplicating a stored item are rejected.
+    """
+    days = 2
+    if "--days" in args:
+        days = int(args[args.index("--days") + 1])
+    try:
+        payload = json.loads(sys.stdin.read())
+    except ValueError as e:
+        print(json.dumps({"error": f"invalid JSON on stdin: {e}"}))
+        sys.exit(1)
+    if not isinstance(payload, list):
+        print(json.dumps({"error": "expected a JSON array"}))
+        sys.exit(1)
+
+    now = datetime.now(timezone.utc)
+    # Whole days: a date-only item from the oldest day of the window still counts.
+    cutoff = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    lookback = (now - timedelta(days=DEDUPE_LOOKBACK_DAYS)).isoformat()
+    handles = {r["handle"].lower(): r["handle"]
+               for r in conn.execute("SELECT handle FROM authors WHERE enabled = 1")}
+
+    accepted, duplicates, rejected = 0, 0, []
+    for index, raw in enumerate(payload):
+        item, reason = validate_web_item(raw, handles, cutoff, now)
+        if not item:
+            rejected.append({"index": index, "reason": reason})
+            continue
+        existing = conn.execute(
+            "SELECT url, text FROM tweets WHERE author = ? AND date >= ?",
+            (item["author"], lookback),
+        ).fetchall()
+        if is_duplicate(item["url"], item["text"], [(r["url"], r["text"]) for r in existing]):
+            duplicates += 1
+            continue
+        key = f"{item['author']}|{canonical_url(item['url'])}"
+        conn.execute(
+            """INSERT INTO tweets
+               (author, tweet_id, date, text, url, is_retweet, fetched_at, platform, source_name)
+               VALUES (?, ?, ?, ?, ?, 0, ?, 'web', ?)""",
+            (item["author"], f"web:{hashlib.sha1(key.encode()).hexdigest()[:16]}",
+             item["date"].isoformat(), item["text"], item["url"], now.isoformat(),
+             item["source_name"]),
+        )
+        accepted += 1
+    conn.commit()
+    print(json.dumps({"accepted": accepted, "duplicates": duplicates, "rejected": rejected},
+                     ensure_ascii=False))
+
 
 # ── Querying ──────────────────────────────────────────────────────────
 
 def cmd_query(conn, args):
-    """Query tweets and output JSON for LLM summarization."""
+    """Query items and output JSON for LLM summarization."""
     days = 3
     author_filter = None
     category_filter = None
@@ -420,7 +614,8 @@ def cmd_query(conn, args):
         params.append(category_filter)
 
     sql = f"""
-        SELECT t.author, a.name, a.category, t.tweet_id, t.date, t.text, t.url, t.is_retweet
+        SELECT t.author, a.name, a.category, t.tweet_id, t.date, t.text, t.url, t.is_retweet,
+               t.platform, t.source_name
         FROM tweets t
         JOIN authors a ON t.author = a.handle
         WHERE {' AND '.join(where)}
@@ -445,6 +640,8 @@ def cmd_query(conn, args):
             "text": r["text"],
             "url": r["url"],
             "is_retweet": bool(r["is_retweet"]),
+            "platform": r["platform"],
+            "source": r["source_name"],
         })
 
     output = {
@@ -651,7 +848,7 @@ def cmd_stats(conn, args):
     ).fetchone()[0]
 
     print(f"📊 过去 {days} 天统计：")
-    print(f"   总推文数：{total}")
+    print(f"   总内容数：{total}")
     print(f"   今日摘要数：{summaries}")
     print(f"   按人物：")
     for r in by_author:
@@ -673,6 +870,8 @@ def main():
 
     if cmd == "fetch":
         cmd_fetch(conn, args)
+    elif cmd == "save-items":
+        cmd_save_items(conn, args)
     elif cmd == "query":
         cmd_query(conn, args)
     elif cmd == "save-summary":

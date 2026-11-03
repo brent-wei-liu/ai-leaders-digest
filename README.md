@@ -1,97 +1,79 @@
 # AI Leaders Digest
 
-追踪 12 位 AI/科技领袖的推文，通过 Nitter RSS 抓取、SQLite 存储，由 Claude Code scheduled tasks 编排三步隔离反思流水线（Draft → Critique → Refine）生成高质量中文摘要。
+追踪 13 位 AI/科技领袖的公开动态：免费 RSS/API 来源（`sources.json`）加每日 web 搜索，存入 SQLite，由 Claude Code scheduled tasks 编排 Research → Extract → Context → Summarize 流水线生成中文摘要，并通过 Gmail SMTP 发送。
+
+X 已关停 Nitter（2026 年 8 月起 RSS 无数据），因此不再直接抓取推文。`tweets` 表中的历史推文保留，`platform` 为 `x`。
 
 ## 架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Claude Code Scheduled Tasks                                │
-│                                                             │
-│  ┌─────────────────────┐    ┌─────────────────────────────┐ │
-│  │ RSS Fetch (4x/day)  │    │ Daily Digest (1x/day 10am) │ │
-│  │ 8:00 静默            │    │                             │ │
-│  │ 12:00 静默           │    │  script: digest query       │ │
-│  │ 16:00 静默           │    │       ↓                     │ │
-│  │ 20:00 汇报           │    │  script stdout (~3KB):      │ │
-│  │                     │    │   meta + tweets_file 路径   │ │
-│  │ script: fetcher.py  │    │   + 3 步 prompt 模板        │ │
-│  │       ↓             │    │       ↓                     │ │
-│  │    SQLite DB        │    │  推文 JSON 落盘到 data/     │ │
-│  └─────────────────────┘    │   latest_tweets_<profile>   │ │
-│                             │       ↓                     │ │
-│                             │  ai-leaders-digest skill    │ │
-│                             │  编排 Agent (Task) 子任务   │ │
-│                             │       ↓                     │ │
-│                             │  ┌──────────────────────┐   │ │
-│                             │  │ Subagent 1: Draft    │   │ │
-│                             │  │ read_file 读推文 JSON│   │ │
-│                             │  └──────────┬───────────┘   │ │
-│                             │             ↓               │ │
-│                             │  ┌──────────────────────┐   │ │
-│                             │  │ Subagent 2: Critique │   │ │
-│                             │  │ (只看得到初稿，隔离) │   │ │
-│                             │  └──────────┬───────────┘   │ │
-│                             │             ↓               │ │
-│                             │  ┌──────────────────────┐   │ │
-│                             │  │ Subagent 3: Refine   │   │ │
-│                             │  │ (初稿 + 审稿意见)    │   │ │
-│                             │  └──────────┬───────────┘   │ │
-│                             │             ↓               │ │
-│                             │  ┌──────────────────────┐   │ │
-│                             │  │ Step 4: Save Summary │   │ │
-│                             │  │ (终稿写入 SQLite DB) │   │ │
-│                             │  └──────────┬───────────┘   │ │
-│                             │             ↓               │ │
-│                             │     最终摘要 → Telegram     │ │
-│                             └─────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+ai-leaders-fetch  (每天 09:40 PT)
+  fetcher.py fetch → sources.json 中的 RSS/Bluesky 来源 → SQLite
+
+ai-leaders-digest (每天 11:40 PT，ai-leaders-digest skill)
+  1. fetcher.py fetch            再刷新一次（幂等）
+  2. Research subagent           web 搜索过去 2 天 → fetcher.py save-items
+  3. digest_generate.py query    内容落盘到 data/latest_tweets_<profile>.json
+  4. Extract subagent            分拣 substantive / filler
+  5. Context subagent            补事实背景（看不到原始内容）
+  6. Summarize subagent          写中文摘要，逐条标注来源（无 web）
+  7. digest_generate.py save-summary
+  8. email_sender.py             Gmail SMTP；失败时回退到 Gmail 草稿
 ```
 
 ## 文件结构
 
 ```
 ai-leaders-digest/
-├── fetcher.py              # 数据层：RSS 抓取、SQLite 存储、查询、管理
-├── digest_generate.py      # 摘要层：数据加载 + 三步 Prompt 模板输出
+├── sources.json            # 作者与每位作者的来源配置
+├── fetcher.py              # 数据层：来源抓取、web 条目入库、查询、管理
+├── digest_generate.py      # 摘要层：数据加载 + Prompt 模板输出
+├── email_sender.py         # Gmail SMTP 发送（按日期防重发）
+├── api.py / db.py / static/  # Web UI
 ├── data/
 │   ├── ai_leaders.db       # SQLite 数据库
-│   └── latest_tweets_<profile>.json  # 每次 run 落盘的推文 JSON（供 Draft subagent 读取）
-├── .claude/skills/ai-leaders-digest/SKILL.md  # 三步反思流水线编排
-└── README.md
+│   ├── email_sent.jsonl    # 已发送日志（防重发）
+│   └── latest_tweets_<profile>.json  # 每次 run 落盘的内容 JSON（供 Extract subagent 读取）
+├── .claude/skills/ai-leaders-digest/SKILL.md  # 流水线编排
+└── tests/                  # 单元测试 + Playwright UI 测试
 ```
 
-Scheduled tasks 由 Claude Code 管理（`~/.claude/scheduled-tasks/`）：
-- `ai-leaders-fetch`：每天 4 次（8/12/16/20 PT）跑 `fetcher.py fetch`
-- `ai-leaders-digest`：每天 10:00 PT 调用 `ai-leaders-digest` skill 跑三步流水线
+## 来源
 
-## 跟踪的 12 位领袖
+来源按作者配置在 [`sources.json`](./sources.json)，新增来源无需改代码。每个来源独立失败，互不影响。
 
-| Handle | 姓名 | 分类 |
-|--------|------|------|
-| karpathy | Andrej Karpathy | ai-engineering |
-| soumithchintala | Soumith Chintala | ai-engineering |
-| sama | Sam Altman | ai-industry |
-| gdb | Greg Brockman | ai-industry |
-| geoffreyhinton | Geoffrey Hinton | ai-pioneer |
-| AndrewYNg | Andrew Ng | ai-pioneer |
-| ylecun | Yann LeCun | ai-pioneer |
-| Yoshua_Bengio | Yoshua Bengio | ai-pioneer |
-| demishassabis | Demis Hassabis | ai-pioneer |
-| elonmusk | Elon Musk | tech-leader |
-| jensenhuang | Jensen Huang | tech-leader |
-| paulg | Paul Graham | startup |
+| 作者 | 来源 | platform |
+|------|------|----------|
+| Andrej Karpathy | karpathy.bearblog.dev | blog |
+| Andrej Karpathy | karpathy-mirr.selfhosted.social（非官方 X 镜像） | x-mirror |
+| Sam Altman | blog.samaltman.com | blog |
+| Sam Altman | sama-mirr.selfhosted.social（非官方 X 镜像） | x-mirror |
+| Yoshua Bengio | Bluesky RSS | bluesky |
+| Greg Brockman | blog.gregbrockman.com | blog |
+| Andrew Ng | The Batch（仅整期，含 Andrew 的信） | newsletter |
+
+Geoffrey Hinton、Elon Musk、Jensen Huang、Paul Graham、Yann LeCun、Demis Hassabis、Soumith Chintala、Serenity (@aleabitoreddit) 没有可用的 feed，只靠 web 搜索（`platform` 为 `web`）。Paul Graham 的 essay RSS 不带日期，无法判断新旧，所以没有收录。
+
+来源类型：
+- `feed`：RSS 或 Atom。必填 `url`；可选 `include_url`（只保留链接匹配该正则的条目）和 `link_rewrite`（`from` / `to` 前缀替换）。
+- `bluesky`：Bluesky 公开 API。必填 `actor`。
+
+所有来源都需要 `platform` 和 `label`，这两个字段决定摘要和 Web UI 中的来源标注。
+
+### Web 搜索条目
+
+`fetcher.py save-items [--days 2]` 从 stdin 读取 JSON 数组（`author`、`date`、`url`、`source_name`、`text`）。没有 URL 或日期、早于窗口、日期在未来或作者未知的条目会被拒绝；与同一作者已有条目 URL 或内容重复的条目不入库。
 
 ## Quick start
 
-1. Set `DIGEST_RECIPIENT` in `.env` (see `.env.example`) to your address — the digest is delivered as a Gmail draft via the Gmail MCP.
-2. On first run, the SQLite DB will be auto-created (see `init_db()` in `fetcher.py`). The first `python3 fetcher.py fetch` run will populate it from Nitter RSS — no manual seeding needed.
+1. Copy `.env.example` to `.env` and set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` — digests are sent via Gmail SMTP (see [Email delivery](#email-delivery)).
+2. On first run, the SQLite DB will be auto-created (see `init_db()` in `fetcher.py`). The first `python3 fetcher.py fetch` run will populate it from `sources.json` — no manual seeding needed.
 3. Register the scheduled tasks per [Setup scheduled tasks](#setup-scheduled-tasks).
 4. (Optional) Launch the Web UI per [Web UI](#web-ui) below to browse tweets and digests.
 
 ## Web UI
 
-A FastAPI + single-file HTML browser for the tweet feed and digest archive, themed after Elden Ring (deep brown/black, hairline gold, Cinzel + Cormorant Garamond). Reads the same `data/ai_leaders.db`, adds two columns (`starred`, `starred_at`) for marking tweets via additive `ALTER TABLE` migration on startup.
+A FastAPI + single-file HTML browser for the item feed and digest archive, themed after Elden Ring (deep brown/black, hairline gold, Cinzel + Cormorant Garamond). Reads the same `data/ai_leaders.db`, adds two columns (`starred`, `starred_at`) for marking tweets via additive `ALTER TABLE` migration on startup.
 
 **Dependencies** (shared with job-pipeline):
 ```bash
@@ -123,6 +105,12 @@ First time accessing from another device, **macOS firewall** will prompt: System
 
 ## Testing
 
+Unit tests (no network, temp DB):
+
+```bash
+python3 -m pytest tests/test_fetcher.py tests/test_email_sender.py
+```
+
 End-to-end UI regression suite using Playwright (Python). Hits the real local API — does not mock, does not spawn the server itself.
 
 Install once:
@@ -150,14 +138,15 @@ The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if t
 
 ### fetcher.py
 
-纯 Python 标准库，零外部依赖。通过 Nitter RSS 抓取推文，存入 SQLite。
+纯 Python 标准库，零外部依赖。抓取 `sources.json` 中的来源，存入 SQLite。
 
 **命令：**
 
 | 命令 | 说明 |
 |------|------|
-| `fetch [--report-hour H]` | 抓取所有启用作者的 RSS，存入 DB。指定 H 时只在该小时输出完整报告 |
-| `query [天数] [--author X] [--category Y] [--profile Z]` | 查询推文，输出 JSON |
+| `fetch [--report-hour H]` | 抓取所有启用作者的来源，存入 DB。指定 H 时只在该小时输出完整报告 |
+| `save-items [--days 2]` | 从 stdin 保存 web 搜索条目（校验 + 去重） |
+| `query [天数] [--author X] [--category Y] [--profile Z]` | 查询内容，输出 JSON |
 | `authors` | 列出所有跟踪的人 |
 | `profiles` | 列出所有 Focus Profile |
 | `add-profile <名> <JSON>` | 添加自定义 Focus Profile |
@@ -169,20 +158,21 @@ The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if t
 | `save-summary [天数] [profile]` | 从 stdin 保存摘要到 DB |
 
 **特性：**
-- 多 Nitter 实例自动 fallback
-- tweet_id 自动去重
+- 每个来源独立失败；全部失败时才以非零状态退出
+- tweet_id 自动去重（`feed:` / `bsky:` / `web:` 前缀）
 - `--report-hour` 支持静默抓取（非报告时间只存数据不输出）
 
 ### digest_generate.py
 
-数据加载 + 三步 Prompt 模板输出。不调用 LLM，LLM 调用由 `ai-leaders-digest` skill 通过 Claude Code 的 `Agent` (Task) 工具编排。
+数据加载 + Prompt 模板输出。不调用 LLM，LLM 调用由 `ai-leaders-digest` skill 通过 Claude Code 的 `Agent` (Task) 工具编排。
 
 **命令：**
 
 | 命令 | 说明 |
 |------|------|
-| `query [--days 3] [--profile default]` | 输出推文数据 + 三步 Prompt 模板 JSON |
-| `save-summary [--days 3] [--profile default]` | 从 stdin 保存摘要到 DB |
+| `research [--days 2]` | 输出 Research 步骤的 prompt（搜索提示 + 已有条目） |
+| `query [--days 5] [--profile default]` | 内容落盘，输出元信息 + 三步 Prompt 模板 JSON |
+| `save-summary [--days 5] [--profile default]` | 从 stdin 保存摘要到 DB |
 | `stats` | 简要统计 |
 
 **query 输出 JSON 结构：**
@@ -194,24 +184,23 @@ The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if t
     "tweets_file": "data/latest_tweets_<profile>.json 的绝对路径"
   },
   "prompts": {
-    "draft": "初稿 Prompt（告诉 subagent 用 read_file 读 tweets_file）",
-    "critique_template": "审稿模板（{draft} 占位符）",
-    "refine_template": "精修模板（{draft} + {critique} 占位符）"
+    "extract": "分拣 Prompt（告诉 subagent 用 Read 读 tweets_file）",
+    "context_template": "背景调研模板（{extracted} 占位符）",
+    "summarize_template": "写作模板（{contexted} 占位符）"
   }
 }
 ```
 
-**设计要点：推文原文不进 stdout**。早期设计把 120KB+ 推文 JSON 内嵌到 draft prompt 中，导致父 agent 的首次 LLM API 请求 payload 过大、TTFT 超过 10 分钟被 cron inactivity watchdog 杀掉。改造后推文落盘到 `data/latest_tweets_<profile>.json`，stdout 只传文件路径（~3KB），由 Draft subagent 用 `read_file` 工具自己读。subagent 的 system prompt 不包含父 agent 的工具 schema + memory，payload 小很多。
+**设计要点：内容原文不进 stdout**。早期设计把 120KB+ 的 JSON 内嵌到 prompt 中，导致父 agent 的首次 LLM API 请求 payload 过大、TTFT 超过 10 分钟被 cron inactivity watchdog 杀掉。改造后内容落盘到 `data/latest_tweets_<profile>.json`，stdout 只传文件路径，由 Extract subagent 用 `Read` 工具自己读。
 
-## 三步隔离反思设计
+## 流水线隔离设计
 
-核心思想：审稿人看不到原始数据，只能评估摘要质量。
-
-| 步骤 | Subagent | 输入 | 输出 | 隔离 |
-|------|----------|------|------|------|
-| Draft | #1 | 原始推文 + 格式指令 | 初稿 | 看得到原始推文 |
-| Critique | #2 | 只有初稿 | 审稿意见 + A/B/C 评分 | 看不到原始推文 |
-| Refine | #3 | 初稿 + 审稿意见 | 终稿 | 看不到原始推文 |
+| 步骤 | Subagent | 输入 | 输出 | Web 预算 |
+|------|----------|------|------|----------|
+| Research | #1 | 作者搜索提示 + 已有条目 | web 条目 JSON（经 `save-items` 校验） | 16 |
+| Extract | #2 | 全部内容文件 | substantive / filler 分拣 JSON | 0 |
+| Context | #3 | 只有 Extract JSON | 加 `context` 和 `sources` 的 JSON | 8 |
+| Summarize | #4 | 只有 Context JSON | 终稿，逐条标注来源 | 0 |
 
 每个 subagent 通过 Claude Code 的 `Agent` (Task) 工具创建，天然上下文隔离。
 
@@ -244,8 +233,8 @@ SQLite（`data/ai_leaders.db`），5 张表：
 
 | 表 | 说明 |
 |----|------|
-| authors | 跟踪的人（handle, name, category, rss_url, enabled） |
-| tweets | 所有推文，按 tweet_id 去重 |
+| authors | 跟踪的人（handle, name, category, enabled）。`rss_url` 已废弃，来源见 `sources.json` |
+| tweets | 所有内容（历史推文、feed、web），按 tweet_id 去重。`platform`：x / x-mirror / bluesky / blog / newsletter / web；`source_name`：来源名；`url`：来源链接 |
 | summaries | 生成的摘要历史 |
 | focus_profiles | Focus 配置 |
 | subscribers | 订阅者 |
@@ -254,8 +243,8 @@ SQLite（`data/ai_leaders.db`），5 张表：
 
 | Task | 时间 (PT) | 说明 |
 |------|----------|------|
-| `ai-leaders-fetch` | 8:00, 12:00, 16:00, 20:00 | 跑 `python3 fetcher.py fetch` |
-| `ai-leaders-digest` | 10:00 | 调用 `ai-leaders-digest` skill 跑三步反思生成摘要并保存到 DB |
+| `ai-leaders-fetch` | 09:40 | 跑 `python3 fetcher.py fetch` |
+| `ai-leaders-digest` | 11:40 | 调用 `ai-leaders-digest` skill：web 搜索 + 三步流水线 + 保存 DB + 发送邮件 |
 
 任务由 Claude Code 的 scheduled-tasks 系统管理（`~/.claude/scheduled-tasks/`），无须独立守护进程。
 
@@ -269,14 +258,14 @@ Claude will use the `schedule` skill to create each task, copying the relevant S
 
 ## Email delivery
 
-Digest is delivered as a Gmail draft via the Gmail MCP. Set `DIGEST_RECIPIENT` in `.env` (see `.env.example`) to the recipient address. Open the draft in Gmail to review and send.
+Digests are sent by `email_sender.py` through `smtp.gmail.com:587` (STARTTLS) as plain text + rendered HTML. Set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` in `.env` (see `.env.example`); the App Password comes from https://myaccount.google.com/apppasswords and requires 2-Step Verification. Preview without sending using `python3 email_sender.py --dry-run`. Each digest date is sent once (logged in `data/email_sent.jsonl`); use `--force` to resend. If sending fails, the skill falls back to a Gmail draft via the Gmail MCP `create_draft` tool when that connector is available.
 
 ## 手动使用
 
 ```bash
 cd /path/to/ai-leaders-digest
 
-# 抓取最新推文
+# 抓取最新内容
 python3 fetcher.py fetch
 
 # 查看统计
@@ -298,9 +287,13 @@ python3 fetcher.py authors
 - `digest_generate.py` 去掉了 OpenClaw Gateway API 调用，输出 JSON + 三步 Prompt 模板
 - 编排层从 Hermes `delegate_task` 切到 Claude Code `Agent` (Task) 工具，由 `.claude/skills/ai-leaders-digest/SKILL.md` 描述完整流水线
 - 调度层从 Hermes cron 切到 Claude Code scheduled-tasks（`~/.claude/scheduled-tasks/`），不再依赖独立守护进程
+- Nitter 关停后，数据源改为 `sources.json` 中的 RSS/API 来源 + web 搜索；发送方式从 Gmail 草稿改为 SMTP
 
 ## 已知限制
 
-- Nitter 实例不稳定，有 fallback 但可能全挂（尤其 Elon Musk 的 RSS）
-- 三步 subagent 串行执行，生成摘要需要 10-15 分钟
-- 每次 run 会覆盖 `data/latest_tweets_<profile>.json`（只保留最新一份，供 Draft subagent 读取）
+- 8 位作者没有 feed，只靠 web 搜索，覆盖率取决于媒体是否报道；"沉默的狗"只代表没抓到，不代表本人没发言
+- X 镜像是非官方账号，随时可能停更；`fetch` 报告里每个来源的 `newest` 可用来发现停更
+- 无法用代码核实 web 条目的引语是否逐字准确，只能靠 prompt 约束
+- 摘要窗口 5 天、每天发送，同一条内容可能连续几天出现
+- 流水线串行执行，生成摘要需要 10-15 分钟
+- 每次 run 会覆盖 `data/latest_tweets_<profile>.json`（只保留最新一份，供 Extract subagent 读取）
