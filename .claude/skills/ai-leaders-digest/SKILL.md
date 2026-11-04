@@ -10,7 +10,7 @@ description: >
 
 # AI Leaders Digest
 
-Generate a Chinese-language digest of 13 AI/tech leaders' recent public activity. X can no longer be read directly, so content comes from two places: free RSS/API sources configured per author in `sources.json` (`fetcher.py fetch`), and a web search step that covers everyone else (Step 2). Isolated subagents then run the **pipeline** Extract → Context → Summarize, whose job is to faithfully report what each person said and add factual background. No forced pattern-mining.
+Generate a Chinese-language digest of 14 AI/tech leaders' recent public activity. X can no longer be read directly, so content comes from two places: free RSS/API sources configured per author in `sources.json` (`fetcher.py fetch`), and a web search step that covers everyone else (Step 2). Isolated subagents then run the **pipeline** Extract → Context → Summarize, whose job is to faithfully report what each person said and add factual background. No forced pattern-mining.
 
 **Project root:** the directory containing this SKILL.md's grand-grandparent (`<project>/.claude/skills/ai-leaders-digest/SKILL.md`). Always `cd` there first, and start every shell command with `cd <project-root> && ` because the shell's working directory can reset between commands.
 

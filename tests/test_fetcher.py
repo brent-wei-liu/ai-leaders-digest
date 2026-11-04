@@ -279,7 +279,7 @@ def test_research_prompt_lists_authors_and_existing_items(conn, monkeypatch, cap
 
 def test_repo_config_is_well_formed():
     config = json.loads((Path(fetcher.__file__).parent / "sources.json").read_text())
-    assert len(config) == 13
+    assert len(config) == 14
     for author in config:
         for source in author["sources"]:
             assert source["type"] in fetcher.SOURCE_FETCHERS and source["platform"] and source["label"]

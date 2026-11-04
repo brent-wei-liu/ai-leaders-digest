@@ -136,6 +136,20 @@
     "sources": []
   },
   {
+    "handle": "rasbt",
+    "name": "Sebastian Raschka",
+    "category": "ai-engineering",
+    "search_hint": "Sebastian Raschka LLM",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://magazine.sebastianraschka.com/feed",
+        "platform": "newsletter",
+        "label": "Ahead of AI (Substack)"
+      }
+    ]
+  },
+  {
     "handle": "aleabitoreddit",
     "name": "Serenity",
     "category": "investor",
