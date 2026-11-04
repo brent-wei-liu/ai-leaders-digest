@@ -175,6 +175,41 @@ def test_fetch_dedupes_without_unique_constraint(tmp_path, monkeypatch, capsys):
     c.close()
 
 
+def _index_names(c):
+    return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+
+
+def test_clean_db_gets_unique_index_and_reposts_stay_per_author(conn):
+    assert "idx_tweets_author_tweet_id" in _index_names(conn)
+    row = "INSERT INTO tweets (author, tweet_id, date, text, fetched_at) VALUES (?, 'p1', 'd', 't', 'n')"
+    conn.execute(row, ("alice",))
+    conn.execute(row, ("bob",))  # bob reposting alice's post is his own row
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(row, ("alice",))
+
+
+def test_db_with_duplicates_falls_back_to_plain_index(tmp_path, monkeypatch):
+    path = tmp_path / "dupes.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE authors (handle TEXT PRIMARY KEY, name TEXT, category TEXT, rss_url TEXT, enabled INTEGER DEFAULT 1);
+        CREATE TABLE tweets (id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, date TEXT, text TEXT, url TEXT,
+            is_retweet INTEGER DEFAULT 0, tweet_id TEXT, fetched_at TEXT);
+        INSERT INTO tweets (author, tweet_id, date, text, fetched_at) VALUES ('alice', 'x', 'd', 't', 'n'), ('alice', 'x', 'd', 't', 'n');
+    """)
+    old.commit()
+    old.close()
+    sources = tmp_path / "s.json"
+    sources.write_text(json.dumps(CONFIG))
+    monkeypatch.setattr(fetcher, "SOURCES_PATH", str(sources))
+    monkeypatch.setattr(fetcher, "DB_PATH", str(path))
+    c = fetcher.get_db()
+    fetcher.init_db(c)
+    names = _index_names(c)
+    assert "idx_tweets_tweet_id" in names and "idx_tweets_author_tweet_id" not in names
+    c.close()
+
+
 def test_save_items_accepts_valid_and_labels_web(conn, monkeypatch, capsys):
     result = save(conn, monkeypatch, capsys, [web_item(author="@ALICE")])
     assert result == {"accepted": 1, "duplicates": 0, "rejected": []}

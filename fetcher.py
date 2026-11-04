@@ -126,7 +126,7 @@ def init_db(conn):
         CREATE TABLE IF NOT EXISTS tweets (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             author      TEXT NOT NULL REFERENCES authors(handle),
-            tweet_id    TEXT UNIQUE,
+            tweet_id    TEXT,  -- unique per author: idx_tweets_author_tweet_id
             date        TEXT NOT NULL,
             text        TEXT NOT NULL,
             url         TEXT,
@@ -204,9 +204,16 @@ def ensure_source_columns(conn):
     ]:
         if col not in cols:
             conn.execute(f"ALTER TABLE tweets ADD COLUMN {col} {typedef}")
-    # Not UNIQUE: restored copies of the live DB lost the tweet_id constraint and
-    # already hold duplicate legacy rows, so inserts check for existence instead.
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tweets_tweet_id ON tweets(tweet_id)")
+    # Per author, not global: a repost puts another author's post id in this
+    # author's feed. Restored DB copies lost the original UNIQUE(tweet_id); one
+    # that still holds duplicates gets a plain index and relies on the
+    # existence check in store_items until it is deduped.
+    try:
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tweets_author_tweet_id "
+                     "ON tweets(author, tweet_id)")
+        conn.execute("DROP INDEX IF EXISTS idx_tweets_tweet_id")
+    except sqlite3.IntegrityError:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tweets_tweet_id ON tweets(tweet_id)")
 
 
 def load_author_config():
@@ -358,7 +365,8 @@ def store_items(conn, handle, source, items, now):
     for item in items:
         if not item["date"] or not item["url"] or not item["text"]:
             continue
-        if conn.execute("SELECT 1 FROM tweets WHERE tweet_id = ?", (item["id"],)).fetchone():
+        if conn.execute("SELECT 1 FROM tweets WHERE author = ? AND tweet_id = ?",
+                        (handle, item["id"])).fetchone():
             dupes += 1
             continue
         conn.execute(
