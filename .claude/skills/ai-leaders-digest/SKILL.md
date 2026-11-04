@@ -10,7 +10,7 @@ description: >
 
 # AI Leaders Digest
 
-Generate a Chinese-language digest of 14 AI/tech leaders' recent public activity. X can no longer be read directly, so content comes from two places: free RSS/API sources configured per author in `sources.json` (`fetcher.py fetch`), and a web search step that covers everyone else (Step 2). Isolated subagents then run the **pipeline** Extract → Context → Summarize, whose job is to faithfully report what each person said and add factual background. No forced pattern-mining.
+Generate a Chinese-language digest of 17 AI/tech leaders' recent public activity. X can no longer be read directly, so content comes from two places: free RSS/API sources configured per author in `sources.json` (`fetcher.py fetch`), and a web search step that covers everyone else (Step 2). Isolated subagents then run the **pipeline** Extract → Context → Summarize, whose job is to faithfully report what each person said and add factual background. No forced pattern-mining.
 
 **Project root:** the directory containing this SKILL.md's grand-grandparent (`<project>/.claude/skills/ai-leaders-digest/SKILL.md`). Always `cd` there first, and start every shell command with `cd <project-root> && ` because the shell's working directory can reset between commands.
 
@@ -18,11 +18,11 @@ Generate a Chinese-language digest of 14 AI/tech leaders' recent public activity
 
 ### Web tool budget
 
-**Hard cap = 24 calls total.** Tell each subagent its budget explicitly. It is a ceiling, not a target.
+**Hard cap = 26 calls total.** Tell each subagent its budget explicitly. It is a ceiling, not a target.
 
 | Step | Budget | Use it for |
 |------|--------|------------|
-| Research (2) | **16** | `extended` searches (standard mode returns almost nothing recent), at least 5 calls kept for opening pages to confirm dates and exact quotes |
+| Research (2) | **18** | `extended` searches (standard mode returns almost nothing recent), at least 5 calls kept for opening pages to confirm dates and exact quotes |
 | Extract (4) | **0** | sorting only |
 | Context (5) | **8** | background on named papers / products / companies in substantive items |
 | Summarize (6) | **0** | pure synthesis from the contexted JSON |
@@ -43,7 +43,7 @@ python3 digest_generate.py research --days 2
 
 Returns `meta` and `prompt`. Spawn an Agent with `subagent_type=general-purpose`, passing `prompt` verbatim.
 
-**Append to the prompt**: "You may use WebSearch (mode extended) / WebFetch up to **16 times, hard ceiling**. Return nothing for an author if you find nothing. Never invent a quote, URL or date."
+**Append to the prompt**: "You may use WebSearch (mode extended) / WebFetch up to **18 times, hard ceiling**. Return nothing for an author if you find nothing. Never invent a quote, URL or date."
 
 Parse the ```json``` array out of the reply, write it to a temp file and store it:
 

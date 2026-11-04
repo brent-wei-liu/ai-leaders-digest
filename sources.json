@@ -150,6 +150,48 @@
     ]
   },
   {
+    "handle": "simonw",
+    "name": "Simon Willison",
+    "category": "ai-engineering",
+    "search_hint": "Simon Willison LLM",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://simonwillison.net/atom/entries/",
+        "platform": "blog",
+        "label": "simonwillison.net"
+      }
+    ]
+  },
+  {
+    "handle": "jackclarkSF",
+    "name": "Jack Clark",
+    "category": "ai-industry",
+    "search_hint": "Jack Clark Anthropic AI policy",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://importai.substack.com/feed",
+        "platform": "newsletter",
+        "label": "Import AI (Substack)"
+      }
+    ]
+  },
+  {
+    "handle": "natolambert",
+    "name": "Nathan Lambert",
+    "category": "ai-engineering",
+    "search_hint": "Nathan Lambert Interconnects AI2 open models",
+    "sources": [
+      {
+        "type": "feed",
+        "url": "https://www.interconnects.ai/feed",
+        "platform": "newsletter",
+        "label": "Interconnects (Substack)"
+      }
+    ]
+  },
+  {
     "handle": "aleabitoreddit",
     "name": "Serenity",
     "category": "investor",

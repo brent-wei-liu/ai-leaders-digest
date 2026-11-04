@@ -1,6 +1,6 @@
 # AI Leaders Digest
 
-追踪 14 位 AI/科技领袖的公开动态：免费 RSS/API 来源（`sources.json`）加每日 web 搜索，存入 SQLite，由 Claude Code scheduled tasks 编排 Research → Extract → Context → Summarize 流水线生成中文摘要，并通过 Gmail SMTP 发送。
+追踪 17 位 AI/科技领袖的公开动态：免费 RSS/API 来源（`sources.json`）加每日 web 搜索，存入 SQLite，由 Claude Code scheduled tasks 编排 Research → Extract → Context → Summarize 流水线生成中文摘要，并通过 Gmail SMTP 发送。
 
 X 已关停 Nitter（2026 年 8 月起 RSS 无数据），因此不再直接抓取推文。`tweets` 表中的历史推文保留，`platform` 为 `x`。
 
@@ -52,6 +52,9 @@ ai-leaders-digest/
 | Greg Brockman | blog.gregbrockman.com | blog |
 | Andrew Ng | The Batch（仅整期，含 Andrew 的信） | newsletter |
 | Sebastian Raschka | Ahead of AI（Substack） | newsletter |
+| Simon Willison | simonwillison.net（只收长文 entries） | blog |
+| Jack Clark | Import AI（Substack） | newsletter |
+| Nathan Lambert | Interconnects（Substack） | newsletter |
 
 Geoffrey Hinton、Elon Musk、Jensen Huang、Paul Graham、Yann LeCun、Demis Hassabis、Soumith Chintala、Serenity (@aleabitoreddit) 没有可用的 feed，只靠 web 搜索（`platform` 为 `web`）。Paul Graham 的 essay RSS 不带日期，无法判断新旧，所以没有收录。
 
@@ -198,7 +201,7 @@ The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if t
 
 | 步骤 | Subagent | 输入 | 输出 | Web 预算 |
 |------|----------|------|------|----------|
-| Research | #1 | 作者搜索提示 + 已有条目 | web 条目 JSON（经 `save-items` 校验） | 16 |
+| Research | #1 | 作者搜索提示 + 已有条目 | web 条目 JSON（经 `save-items` 校验） | 18 |
 | Extract | #2 | 全部内容文件 | substantive / filler 分拣 JSON | 0 |
 | Context | #3 | 只有 Extract JSON | 加 `context` 和 `sources` 的 JSON | 8 |
 | Summarize | #4 | 只有 Context JSON | 终稿，逐条标注来源 | 0 |

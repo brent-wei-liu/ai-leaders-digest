@@ -164,7 +164,7 @@ RESEARCH_PROMPT = """你是 AI 领袖 digest 流水线的 Research 步骤：用 
 ]
 ```"""
 
-RESEARCH_BUDGET = 16
+RESEARCH_BUDGET = 18
 
 
 # ── Three-Step Pipeline Prompt Templates ─────────────────────────────
